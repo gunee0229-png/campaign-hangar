@@ -1320,7 +1320,7 @@
     workStart=performance.now();
     byId("busyTitle").textContent=title||"캠페인 작업 중";
     byId("busyElapsed").textContent="진행 시간 0초";
-    if(!byId("introToggle")||byId("introToggle").getAttribute("aria-pressed")!=="true")return;
+    if(!byId("workBrowseToggle")||byId("workBrowseToggle").getAttribute("aria-pressed")==="true")return;
     // Do not flash a fake loading screen for fast non-blocking operations.
     workDelay=setTimeout(function(){
       workDelay=null;if(!workActive)return;

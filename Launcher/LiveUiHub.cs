@@ -294,6 +294,7 @@ namespace CampaignHangar
             {
                 hubProgressActive = false;
                 hubMeasuredProgress = null;
+                CloseHubWorkWindow();
             }
             // Keep state even while WebView2 is loading, so its first ready
             // frame can be synchronized without replaying stale percentages.
@@ -607,8 +608,6 @@ namespace CampaignHangar
             // Confirm that the *native* WorkProgress reporter, rather than
             // a browser-only fabricated progress value, reaches the UI.
             hubProgressSequence = 10006;
-            bool originalIntro=uiLook.Value.intro;
-            uiLook.Value.intro=false;
             var realProgress = RunWork("QA ZIP 진행 이벤트", reporter => {
                 reporter(new WorkProgress("실측 바이트 복사 중",1024*1024,4*1024*1024,true));
                 System.Threading.Thread.Sleep(550);
@@ -624,17 +623,20 @@ namespace CampaignHangar
             using(var image=File.Create(Path.Combine(output,"work-native-progress.png")))
                 await hubWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
             await realProgress;
-            uiLook.Value.intro=originalIntro;
             await Task.Delay(110);
             string browseSurface=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
                 UiLab.setView('archive');
-                UiLab.setWorkProgress({sequence:10020,active:true,fullscreen:true,browse:true,
+                UiLab.setWorkProgress({sequence:10020,active:true,fullscreen:true,browse:false,
                     title:'격리 검수 · 다운로드 및 등록',stage:'파일 확인 중',completed:1048576,total:4194304,bytes:true,cancelable:true});
+                var original=document.querySelector('.boot-center').getBoundingClientRect();
+                document.getElementById('bootBrowse').click();
                 var box=document.getElementById('boot').getBoundingClientRect();
                 var center=document.querySelector('.boot-center').getBoundingClientRect();
-                var mount=document.getElementById('archiveMount').getBoundingClientRect();
-                return box.width<=320&&center.right<=box.right&&center.bottom<=box.bottom&&
-                    mount.right<box.left?'ok':'compact-work-overlap';
+                var style=getComputedStyle(document.getElementById('boot'));
+                return box.width<=670&&center.right<=box.right+1&&center.bottom<=box.bottom+1&&
+                    Math.abs(box.left-original.left)<1&&Math.abs(box.top-original.top)<1&&style.backgroundImage==='none'&&
+                    style.borderTopWidth==='0px'&&getComputedStyle(document.getElementById('boot'),'::before').display==='none'?
+                    'ok':'compact-work-overlap-or-artwork';
             })()"));
             if(browseSurface!="ok")throw new InvalidOperationException(browseSurface);
             await Task.Delay(100);
@@ -1116,9 +1118,7 @@ namespace CampaignHangar
             var immediateBoot = Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
                 var u=window.UiLab;
                 u.setThemeFromHost('terran');
-                // Turning the work-progress fullscreen mode off must NOT
-                // disable the independent species transition animation.
-                u.applyLivePreferences({intro:false,reducedMotion:false});
+                u.applyLivePreferences({browseWhileWorking:false,reducedMotion:false});
                 document.getElementById('boot').classList.add('is-hidden');
                 document.querySelector('[data-set-theme=protoss]').click();
                 if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return 'reduced';
@@ -1270,6 +1270,7 @@ namespace CampaignHangar
             await VerifyQuickResizeAsync(output);
             await VerifyUtilityDialogSkinsAsync(output);
             await VerifyThemeArtworkAsync(output);
+            await VerifyDetachedWorkWindowAsync(output);
         }
         async Task VerifyQuickResizeAsync(string output)
         {
@@ -1473,7 +1474,7 @@ namespace CampaignHangar
             })()"));
             if(contact!="ok")throw new InvalidOperationException("Contact free actions: "+contact);
             await hubWeb.ExecuteScriptAsync("HangarFeatures.applyHostProfiles("+original+");");
-            await hubWeb.ExecuteScriptAsync("UiLab.applyLivePreferences({intro:true,reducedMotion:false});UiLab.replayBoot(1000);");
+            await hubWeb.ExecuteScriptAsync("UiLab.applyLivePreferences({browseWhileWorking:false,reducedMotion:false});UiLab.replayBoot(1000);");
             await Task.Delay(100);
             using(var png=File.Create(Path.Combine(output,"enhanced-loading.png")))
                 await hubWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,png);
@@ -1845,7 +1846,7 @@ namespace CampaignHangar
                     hubWeb.ExecuteScriptAsync("window.HangarFeatures.editorCommand({action:'close'})");
                 }
             };
-            FormClosed += delegate { CloseHubEditor(); };
+            FormClosed += delegate { CloseHubEditor();CloseHubWorkWindow(); };
             hubWeb = new WebView2 { Dock = DockStyle.Fill, Visible = false,
                 AllowExternalDrop = true,
                 DefaultBackgroundColor = GlassTheme.Background };
@@ -2377,7 +2378,7 @@ namespace CampaignHangar
                 };
                 hubWeb.Visible = true;
                 hubWeb.BringToFront();
-                bool intro = uiLook != null && uiLook.Value.intro && !isolated;
+                bool intro = uiLook != null && !uiLook.Value.browseWhileWorking && !isolated;
                 hubWeb.Source = new Uri("https://hangar-live.test/index.html?live=1&embed=1&theme=" +
                     LiveTheme.Current.Id + "&intro=" + (intro ? "1" : "0") + "&channel=" + AppChannel.Id);
             }
@@ -2624,7 +2625,6 @@ namespace CampaignHangar
             {
                 string json = Data.Json.Serialize(new {
                     theme = LiveTheme.Current.Id,
-                    intro = uiLook.Value.intro,
                     browseWhileWorking = uiLook.Value.browseWhileWorking,
                     reducedMotion = uiLook.Value.reducedMotion,
                     highContrast = uiLook.Value.highContrast
@@ -2959,6 +2959,9 @@ namespace CampaignHangar
                     hubWorkCancellation.Cancel();
                 else if (hubExternalCancel != null) hubExternalCancel();
             }
+            else if(command.StartsWith("work-window-state:",StringComparison.Ordinal))
+                ShowHubWorkWindow(command.Substring("work-window-state:".Length));
+            else if(command=="work-window-hide")CloseHubWorkWindow();
             else if (command == "archive-reload") archiveView.RefreshFromHub();
             else if (command == "archive-external") archiveView.ExternalFromHub();
             else if (command.StartsWith("archive-detail:",StringComparison.Ordinal))
@@ -3044,9 +3047,7 @@ namespace CampaignHangar
             {
                 if (uiLook == null) return;
                 var setting = command.Substring("settings:".Length);
-                if (setting == "intro:1") uiLook.Value.intro = true;
-                else if (setting == "intro:0") uiLook.Value.intro = false;
-                else if (setting == "work-browse:1") uiLook.Value.browseWhileWorking = true;
+                if (setting == "work-browse:1") uiLook.Value.browseWhileWorking = true;
                 else if (setting == "work-browse:0") uiLook.Value.browseWhileWorking = false;
                 else if (setting == "motion:1") uiLook.Value.reducedMotion = true;
                 else if (setting == "motion:0") uiLook.Value.reducedMotion = false;

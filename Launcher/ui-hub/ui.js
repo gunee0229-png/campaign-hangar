@@ -70,14 +70,40 @@
   if (liveMode) state.favorites = new Set();
   var el = function (id) { return document.getElementById(id); };
   var bootFrame = null, toastTimer = null;
-  var introEnabled = true, liveDataReceived = false, registeredCount = 12, installedOnly = false;
+  var liveDataReceived = false, registeredCount = 12, installedOnly = false;
   var themeSwitchSerial=0,viewHistory=[];
   var hostWorkActive=false,hostWorkDisplayed=false,hostWorkSequence=-1,hostWorkId=0;
   var workBrowseDefault=false,workBrowsing=false;
+  var workInitialRect=null;
+  function syncDetachedWorkWindow(){
+    if(!liveMode||!hostWorkActive||!workBrowsing||!workInitialRect)return;
+    var style=getComputedStyle(document.body),colors={};
+    ["bg","panel","panel2","text","dim","accent","accent-bright","accent-rgb","secondary","secondary-rgb",
+      "edge","edge-faint","progressColor","buttonText"].forEach(function(key){
+      colors["--"+key]=style.getPropertyValue("--"+key).trim();
+    });
+    sendHost("work-window-state:"+JSON.stringify({html:document.querySelector(".boot-center").outerHTML,
+      theme:state.theme,colors:colors,rect:workInitialRect,
+      indeterminate:el("boot").classList.contains("is-indeterminate")}));
+  }
+  function workWindowAttached(attached){
+    el("boot").classList.toggle("is-native-work",!!attached&&hostWorkActive&&workBrowsing);
+  }
   function showWorkBrowse(value){
     workBrowsing=!!value;
     if(el("boot").classList.contains("is-compact-work")===workBrowsing&&
        document.body.classList.contains("is-booting")!==workBrowsing)return;
+    if(workBrowsing){
+      var rect=document.querySelector(".boot-center").getBoundingClientRect();
+      workInitialRect={x:Math.round(rect.left),y:Math.round(rect.top),width:Math.round(rect.width),height:Math.round(rect.height),
+        viewWidth:innerWidth,viewHeight:innerHeight};
+      el("boot").style.setProperty("--work-box-left",rect.left+"px");
+      el("boot").style.setProperty("--work-box-top",rect.top+"px");
+      el("boot").style.setProperty("--work-box-width",rect.width+"px");
+    }else{
+      workWindowAttached(false);
+      if(liveMode)sendHost("work-window-hide");
+    }
     el("boot").classList.toggle("is-compact-work",workBrowsing);
     document.body.classList.toggle("work-browsing",workBrowsing);
     document.body.classList.toggle("is-booting",!workBrowsing);
@@ -86,6 +112,7 @@
       if(workBrowsing)window.HangarFeatures.resumeArchive();
       else window.HangarFeatures.suspendArchive();
     }
+    syncDetachedWorkWindow();
   }
   function setWorkProgress(data) {
     if(!data || typeof data!=="object" || !Number.isFinite(Number(data.sequence)))return false;
@@ -101,6 +128,8 @@
     if(!hostWorkActive){
       if(hostWorkDisplayed){
         hostWorkDisplayed=false;
+        workWindowAttached(false);
+        if(liveMode)sendHost("work-window-hide");
         el("boot").classList.remove("is-work","is-indeterminate");
         el("boot").classList.add("is-hidden");
         document.body.classList.remove("is-booting");
@@ -160,6 +189,7 @@
     setText("bootWorkOverall","현재 단계 "+(hasTotal?fraction+"%":"측정 중")+
       " · 전체 작업 진행 중 (총 소요량 미확정)");
     document.querySelector(".boot-headline").textContent="작업 진행 중";
+    syncDetachedWorkWindow();
     return true;
   }
   var activationState={active:"",previous:""};
@@ -396,15 +426,15 @@
       el("workspace").scrollTop = 0;
       el("campaignList").parentElement.scrollTop = 0;
     }
-    if (!bootPrepared&&(animate || (liveMode && changing && !fromHost)))
+    if (!workBrowseDefault&&!bootPrepared&&(animate || (liveMode && changing && !fromHost)))
       replayBoot(liveMode?1000:undefined);
     sendHost("ready:" + t.concept);
     return true;
   }
   function switchThemeWithBoot(next){
     if(!THEMES[next]||state.theme===next)return false;
-    if(!liveMode||state.reduceMotion||window.matchMedia("(prefers-reduced-motion: reduce)").matches)
-      return setTheme(next,false);
+    if(!liveMode||workBrowseDefault||state.reduceMotion||window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      return setTheme(next,false,true);
     // Reveal the opaque loading layer BEFORE changing the underlying layout.
     // Two paint frames separate the click from the theme reflow.
     var serial=++themeSwitchSerial;
@@ -827,20 +857,17 @@
   }
   function applyLivePreferences(prefs) {
     if (!prefs || typeof prefs !== "object") return false;
-    if (typeof prefs.intro==="boolean") introEnabled=prefs.intro;
     if (typeof prefs.browseWhileWorking==="boolean") {
       workBrowseDefault=prefs.browseWhileWorking;
       if(hostWorkDisplayed)showWorkBrowse(workBrowseDefault);
     }
-    setOptionLabel("workBrowseToggle",workBrowseDefault?"작업 진행: 작은 창":"작업 진행: 전체 화면");
+    setOptionLabel("workBrowseToggle",workBrowseDefault?"작업 진행: 진행 박스만":"작업 진행: 전체 화면");
     el("workBrowseToggle").setAttribute("aria-pressed",String(workBrowseDefault));
     if (typeof prefs.reducedMotion==="boolean") state.reduceMotion=prefs.reducedMotion;
     if (typeof prefs.highContrast==="boolean") state.contrast=prefs.highContrast;
     document.body.classList.toggle("reduce-motion",state.reduceMotion);
     document.body.classList.toggle("high-contrast",state.contrast);
-    var intro=el("introToggle"),motion=el("motionToggle"),contrast=el("contrastToggle");
-    setOptionLabel("introToggle",introEnabled?"시작 로딩 화면: 켜짐":"시작 로딩 화면: 꺼짐");
-    intro.setAttribute("aria-pressed",String(introEnabled));
+    var motion=el("motionToggle"),contrast=el("contrastToggle");
     setOptionLabel("motionToggle",state.reduceMotion?"모션 기본값":"모션 줄이기");
     motion.setAttribute("aria-pressed",String(state.reduceMotion));
     setOptionLabel("contrastToggle",state.contrast?"고대비 끄기":"고대비 켜기");
@@ -1038,12 +1065,6 @@
       resetSmoothScroll(el("campaignList").parentElement);
       if(liveMode) sendHost("settings:motion:"+(state.reduceMotion?"1":"0"));
     });
-    el("introToggle").addEventListener("click",function(){
-      introEnabled=!introEnabled;
-      this.setAttribute("aria-pressed",String(introEnabled));
-      setOptionLabel("introToggle",introEnabled?"시작 로딩 화면: 켜짐":"시작 로딩 화면: 꺼짐");
-      if(liveMode) sendHost("settings:intro:"+(introEnabled?"1":"0"));
-    });
     el("bootBrowse").addEventListener("click",function(){if(hostWorkDisplayed)showWorkBrowse(!workBrowsing);});
     el("workBrowseToggle").addEventListener("click",function(){
       workBrowseDefault=!workBrowseDefault;
@@ -1160,6 +1181,8 @@
     replayBoot:replayBoot,finishBoot:finishBoot,mode:setMode,getState:function(){return state;},
     setRealCampaigns:setRealCampaigns,setFavoriteIds:setFavoriteIds,navigateBack:navigateBack,
     setActivationState:setActivationState,setWorkProgress:setWorkProgress,
+    workWindowAttached:workWindowAttached,
+    showWorkFullScreen:function(){showWorkBrowse(false);},
     setActivityTotals:setActivityTotals,setUpdateNotice:setUpdateNotice,
     revealCampaign:revealCampaign,
     getSelected:chosen, getCampaigns:function(){return campaigns.slice();},

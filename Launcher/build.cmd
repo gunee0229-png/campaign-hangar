@@ -16,7 +16,7 @@ xcopy /e /i /y "%~dp0ui-hub" "%OUT%\assets\ui-hub" >nul
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0generate-package-files.ps1" -OutputFile "%OUT%\package-files.g.cs"
 if errorlevel 1 exit /b %errorlevel%
-set EXTRA=%EXTRA% "%OUT%\package-files.g.cs"
+set EXTRA=%EXTRA% "%OUT%\package-files.g.cs" "%~dp0WorkWindow.cs" /resource:"%~dp0ui-hub\progress.html",CampaignHangar.Progress
 copy /y "%WV%\Microsoft.Web.WebView2.Core.dll" "%OUT%\Microsoft.Web.WebView2.Core.dll" >nul
 if errorlevel 1 exit /b %errorlevel%
 copy /y "%WV%\Microsoft.Web.WebView2.WinForms.dll" "%OUT%\Microsoft.Web.WebView2.WinForms.dll" >nul

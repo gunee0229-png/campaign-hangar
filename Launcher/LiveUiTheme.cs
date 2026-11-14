@@ -133,12 +133,10 @@ namespace CampaignHangar
     internal sealed class UiLookPreference
     {
         public string theme { get; set; }
-        public bool intro { get; set; }
         public bool browseWhileWorking { get; set; }
         public bool reducedMotion { get; set; }
         public bool highContrast { get; set; }
-        public int progressDefaults { get; set; }
-        public UiLookPreference() { theme = "terran"; intro = true; }
+        public UiLookPreference() { theme = "terran"; }
     }
     internal sealed class UiLookStore
     {
@@ -160,9 +158,6 @@ namespace CampaignHangar
                 System.Diagnostics.Trace.WriteLine("UI appearance preference could not be read: " + e.Message);
             }
             Value.theme = LiveTheme.Resolve(Value.theme).Id;
-            if(Value.progressDefaults<1) {
-                Value.intro=true;Value.progressDefaults=1;Save();
-            }
         }
         internal void Save()
         {
@@ -555,7 +550,7 @@ namespace CampaignHangar
         void StartLiveIntro(bool forced)
         {
             if (!AppChannel.HasThemedUi || IsDisposed || !IsHandleCreated) return;
-            if (!forced && (isolated || uiLook == null || !uiLook.Value.intro)) return;
+            if (!forced && (isolated || uiLook == null || uiLook.Value.browseWhileWorking)) return;
             if (bootOverlay != null && !bootOverlay.IsDisposed) bootOverlay.Finish();
             UiCinematicBoot current = null;
             current = new UiCinematicBoot(delegate

@@ -419,15 +419,17 @@ namespace CampaignHangar
                     button.AutoSize = true;
                     lookButtons.Controls.Add(button);
                 }
-                var introCheck = new CheckBox { AutoSize = true, Checked = uiLook.Value.intro,
-                    Text = "시작 로딩 화면 표시", ForeColor = GlassTheme.Text,
+                var workBrowseCheck = new CheckBox { AutoSize = true, Checked = uiLook.Value.browseWhileWorking,
+                    Text = "작업 진행 박스만 표시 (해제: 전체 화면)", ForeColor = GlassTheme.Text,
                     BackColor = Color.Transparent, Margin = new Padding(15, 12, 0, 0),
                     Font = new Font("맑은 고딕", 10, FontStyle.Bold) };
-                introCheck.CheckedChanged += delegate {
-                    uiLook.Value.intro = introCheck.Checked;
+                workBrowseCheck.CheckedChanged += async delegate {
+                    uiLook.Value.browseWhileWorking = workBrowseCheck.Checked;
                     uiLook.Save();
+                    await PushLiveHubPreferences();
+                    UpdateHubWorkState();
                 };
-                lookButtons.Controls.Add(introCheck);
+                lookButtons.Controls.Add(workBrowseCheck);
                 var replay = SettingButton("시작 연출 다시 보기", delegate { StartLiveIntro(true); });
                 replay.Margin = new Padding(0, 0, 10, 7);
                 lookButtons.Controls.Add(replay);
@@ -1181,7 +1183,7 @@ namespace CampaignHangar
             {
             // The first progress frame must be painted before ZIP inspection,
             // which can be synchronous for unindexed local archives.
-            if (hubReady && uiLook != null && uiLook.Value.intro) await Task.Delay(45);
+            if (CanShowHubWorkScreen()) await Task.Delay(45);
             // ZIP probes may scan gigabytes of archives; never block the
             // WinForms/WebView2 input thread before the first loading frame.
             bool standalone = await RunWork("ZIP 패키지 형식 확인", progress => {
@@ -2525,7 +2527,7 @@ namespace CampaignHangar
         {
             // In-app update choice: never create a separate modal/OS window and
             // never automatically download a release found in the background.
-            updateOffer.Size = new Size(382, 222);
+            updateOffer.Size = new Size(342, 206);
             updateOffer.BackColor = GlassTheme.Surface;
             updateOffer.Padding = new Padding(18);
             updateOffer.Visible = false;
@@ -2533,38 +2535,38 @@ namespace CampaignHangar
             updateOffer.AccessibleName = "격납고 업데이트 설치 선택";
             updateOffer.Paint += delegate(object sender, PaintEventArgs e) {
                 e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                using (var path = GlassTheme.Round(new Rectangle(1, 1, updateOffer.Width - 3, updateOffer.Height - 3), 16))
+                using (var path = GlassTheme.Round(new Rectangle(1, 1, updateOffer.Width - 3, updateOffer.Height - 3), 18))
                 using (var border = new Pen(GlassTheme.Accent, 1.5f))
                     e.Graphics.DrawPath(border, path);
             };
             updateOffer.SizeChanged += delegate {
-                using (var shape = GlassTheme.Round(new Rectangle(0, 0, updateOffer.Width, updateOffer.Height), 16))
+                using (var shape = GlassTheme.Round(new Rectangle(0, 0, updateOffer.Width, updateOffer.Height), 18))
                 {
                     var old = updateOffer.Region;
                     updateOffer.Region = new Region(shape);
                     if (old != null) old.Dispose();
                 }
             };
-            var heading = new Label { Text = "격납고 업데이트", Location = new Point(19, 13),
-                Size = new Size(344, 36), ForeColor = GlassTheme.Text,
-                Font = new Font("맑은 고딕", 13f, FontStyle.Bold),
+            var heading = new Label { Text = "격납고 업데이트", Location = new Point(18, 12),
+                Size = new Size(306, 30), ForeColor = GlassTheme.Text,
+                Font = new Font("맑은 고딕", 12f, FontStyle.Bold),
                 BackColor = Color.Transparent, TextAlign = ContentAlignment.MiddleLeft };
-            updateOfferVersion.Location = new Point(19, 51); updateOfferVersion.Size = new Size(344, 27);
+            updateOfferVersion.Location = new Point(18, 44); updateOfferVersion.Size = new Size(306, 24);
             updateOfferVersion.Font = new Font("맑은 고딕", 10.25f, FontStyle.Bold);
             updateOfferVersion.ForeColor = GlassTheme.Accent; updateOfferVersion.BackColor = Color.Transparent;
-            updateOfferNotes.Location = new Point(19, 83); updateOfferNotes.Size = new Size(344, 65);
+            updateOfferNotes.Location = new Point(18, 72); updateOfferNotes.Size = new Size(306, 54);
             updateOfferNotes.ForeColor = GlassTheme.Muted; updateOfferNotes.BackColor = Color.Transparent;
             updateOfferNotes.Font = new Font("맑은 고딕", 9.5f);
             updateOfferInstall.Text = "설치"; updateOfferInstall.Primary = true;
             updateOfferDecline.Text = "안 함";
             foreach (var button in new[] { updateOfferInstall, updateOfferDecline })
             {
-                button.Size = new Size(165, 46);
+                button.Size = new Size(146, 42);
                 button.Font = new Font("맑은 고딕", 10.75f, FontStyle.Bold);
                 button.CanvasColor = GlassTheme.Surface;
             }
-            updateOfferInstall.Location = new Point(19, 162);
-            updateOfferDecline.Location = new Point(198, 162);
+            updateOfferInstall.Location = new Point(18, 148);
+            updateOfferDecline.Location = new Point(178, 148);
             updateOfferInstall.Click += async delegate {
                 if (availableAppUpdate == null || checkingAppUpdate || appUpdateInProgress || busy) return;
                 var release = availableAppUpdate;

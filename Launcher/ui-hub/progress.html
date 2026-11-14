@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self'">
+  <title>작업 진행 · 커캠 격납고</title>
+  <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="hub-features.css">
+  <link rel="stylesheet" href="ui-refinements.css">
+  <link rel="stylesheet" href="ui-usability.css">
+  <style>
+    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#071018;}
+    body .boot.progress-window{inset:0;background:none!important;visibility:visible;opacity:1;}
+    .progress-window::before,.progress-window::after{display:none;}
+    body .boot.progress-window .boot-center{position:absolute;inset:0;width:100%!important;transform:none;
+      max-height:none;height:100%;overflow:auto;padding:54px 18px 14px!important;}
+    body .boot.progress-window .boot-headline{font-size:clamp(20px,5vw,30px)!important;}
+    .progress-window .boot-subhead{overflow-wrap:anywhere;}
+    .progress-toolbar{position:absolute;top:6px;right:10px;z-index:4;}
+    @media(max-height:320px){
+      body .boot.progress-window .boot-center{padding:36px 10px 10px!important;}
+      .progress-window .eyebrow{display:none;}
+      body .boot.progress-window .boot-headline{font-size:16px!important;line-height:1.2;}
+      .progress-window .boot-subhead{font-size:10px;margin:4px 0 6px;}
+      .progress-window .boot-progress-rail{height:5px!important;margin-top:6px!important;}
+      body .boot.progress-window .boot-data{font-size:9px;margin-top:4px!important;}
+      .progress-toolbar .tiny-ghost{font-size:10px;padding:5px 8px;}
+      .progress-window .boot-work-amount{font-size:10px;padding-top:5px;}
+      .progress-window .boot-work-overall{font-size:9px;padding-top:4px;}
+      .progress-window .boot-work-cancel{font-size:10px;padding:4px 10px;margin-top:5px;}
+    }
+  </style>
+</head>
+<body data-theme="terran">
+  <main class="boot is-work progress-window" role="status" aria-label="작업 진행">
+    <div class="progress-toolbar"><button type="button" id="expandWork" class="tiny-ghost">크게 보기</button></div>
+    <div id="progressContent"></div>
+  </main>
+  <script>
+  (function(){
+    "use strict";
+    var bridge=window.chrome&&window.chrome.webview,root=document.getElementById("progressContent");
+    if(!bridge)return;
+    document.getElementById("expandWork").addEventListener("click",function(){bridge.postMessage("expand");});
+    root.addEventListener("click",function(e){
+      var button=e.target.closest("#bootWorkCancel");
+      if(!button||button.disabled)return;
+      button.disabled=true;button.textContent="중단 요청 중";bridge.postMessage("cancel");
+    });
+    bridge.addEventListener("message",function(e){
+      var state=e.data;if(!state||typeof state.html!=="string")return;
+      document.body.dataset.theme=state.theme;
+      Object.keys(state.colors||{}).forEach(function(k){document.body.style.setProperty(k,state.colors[k]);});
+      document.querySelector("main").classList.toggle("is-indeterminate",!!state.indeterminate);
+      var old=root.querySelector(".boot-center"),scroll=old?old.scrollTop:0;
+      root.innerHTML=state.html;
+      root.querySelector(".boot-center").scrollTop=scroll;
+      bridge.postMessage("rendered");
+    });
+    bridge.postMessage("ready");
+  })();
+  </script>
+</body>
+</html>

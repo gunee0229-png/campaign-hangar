@@ -54,7 +54,10 @@ namespace CampaignHangar
         public static void Restore(Form form, string path)
         {
             if (!File.Exists(path)) return;
-            var value = Data.Read<WindowPreference>(path);
+            Restore(form,Data.Read<WindowPreference>(path));
+        }
+        public static void Restore(Form form, WindowPreference value)
+        {
             if (value.width <= 0 || value.height <= 0) throw new InvalidDataException("저장된 창 크기가 올바르지 않습니다.");
             var saved=new Rectangle(value.left??form.Left,value.top??form.Top,value.width,value.height);
             var screen=(value.left.HasValue&&value.top.HasValue?Screen.FromRectangle(saved):Screen.FromControl(form)).WorkingArea;

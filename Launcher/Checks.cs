@@ -202,10 +202,10 @@ namespace CampaignHangar
                 VerifyCcmPayload(Path.Combine(root,"ccm-payload"));
                 string lookPath=Path.Combine(root,"work-browse-preference.json");
                 var look=new UiLookStore(lookPath);
-                look.Value.browseWhileWorking=true;look.Value.intro=false;look.Save();
+                look.Value.browseWhileWorking=true;look.Save();
                 var restoredLook=new UiLookStore(lookPath);
-                Assert(restoredLook.Value.browseWhileWorking&&!restoredLook.Value.intro,
-                    "work browsing default persists independently of startup loading preference");
+                Assert(restoredLook.Value.browseWhileWorking,
+                    "unified progress-box preference persists across restart");
                 var publicTitles = new[] {
                     new Campaign { id = "antioch-chronicles", name = "안티오크 연대기", kind = "dedicated" },
                     new Campaign { id = "sc-evo", name = "매스리콜 · SC Evo 적용판", kind = "dedicated" },
