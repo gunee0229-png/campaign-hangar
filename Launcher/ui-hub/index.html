@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>커캠 격납고 · UI 콘셉트 테스트</title>
+  <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="hub-features.css">
+  <link rel="stylesheet" href="ui-refinements.css">
+  <link rel="stylesheet" href="ui-corrections.css">
+  <link rel="stylesheet" href="ui-usability.css">
+  <script src="ui.js" defer></script>
+  <script src="hub-features.js" defer></script>
+</head>
+<body data-theme="terran" class="is-booting">
+  <div class="grain" aria-hidden="true"></div>
+
+  <div class="boot" id="boot" role="status" aria-label="시작 연출">
+    <div class="boot-work-toolbar" id="bootWorkToolbar" hidden>
+      <button type="button" id="bootBrowse" class="tiny-ghost">둘러보기</button>
+    </div>
+    <div class="boot-scene" aria-hidden="true">
+      <div class="boot-halo halo-a"></div>
+      <div class="boot-halo halo-b"></div>
+      <div class="boot-halo halo-c"></div>
+      <div class="boot-beam"></div>
+      <div class="boot-crest"><span id="bootGlyph">⌬</span></div>
+      <div class="boot-corners"></div>
+    </div>
+    <div class="boot-center">
+      <div class="eyebrow" id="bootKind">TACTICAL COMMAND / INITIALIZATION</div>
+      <div class="boot-headline">커캠 <span>격납고</span></div>
+      <div class="boot-subhead" id="bootDescription">작전 통제 시스템을 동기화하고 있습니다</div>
+      <div class="boot-progress-rail"><div id="bootProgress" class="boot-progress-fill"></div></div>
+      <div class="boot-data">
+        <span id="bootStep">서브시스템 연결 중</span>
+        <span id="bootPercent">00%</span>
+      </div>
+      <div id="bootWorkAmount" class="boot-work-amount" hidden></div>
+      <div id="bootWorkOverall" class="boot-work-overall" hidden>전체 작업 · 진행 중</div>
+      <button type="button" id="bootWorkCancel" class="boot-work-cancel" hidden>작업 중단</button>
+    </div>
+    <div class="boot-bottom">
+      <span>UI CONCEPT TEST / CASE 20 · DEMO DATA ONLY</span>
+      <button type="button" id="skipBoot" class="tiny-ghost">시작 연출 건너뛰기 <span>↗</span></button>
+    </div>
+  </div>
+
+  <div class="app" id="app">
+    <header class="titlebar">
+      <div class="drag-zone" id="dragZone" title="드래그해서 창 이동">
+        <span class="top-mark">⬡</span>
+        <span class="top-product">커캠 <b>격납고</b></span>
+        <span class="top-divider"></span>
+        <span class="top-subtext" id="topProductCaption">TACTICAL OPERATIONS / C20</span>
+      </div>
+      <div class="titlebar-actions">
+        <span class="build-flag"><span class="live-dot"></span> UI TEST BUILD</span>
+        <button type="button" id="replayBoot" class="top-tool" title="시작 연출 다시 보기" aria-label="시작 연출 다시 보기">↻</button>
+        <button type="button" id="minimizeApp" class="window-tool" title="최소화" aria-label="최소화">—</button>
+        <button type="button" id="maximizeApp" class="window-tool" title="최대화" aria-label="최대화">□</button>
+        <button type="button" id="closeApp" class="window-tool close" title="닫기" aria-label="닫기">×</button>
+      </div>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="brand-symbol"><span id="brandGlyph">⌬</span><div class="orbit-line"></div></div>
+        <div class="logo-copy"><span class="over-title" id="brandOverline">UNITED COMMAND</span><strong>커캠 격납고</strong><small id="brandSubline">CAMPAIGN OPERATIONS</small></div>
+      </div>
+      <div class="side-quick-actions" role="group" aria-label="바로가기">
+        <button type="button" id="sideYoutubeButton" class="side-quick-button" title="DEAD SIGNAL CINEMA 유튜브" aria-label="유튜브 채널 열기"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="m10 9 5 3-5 3z"/></svg></button>
+        <button type="button" id="sideNotificationsButton" class="side-quick-button" title="격납고 알림" aria-label="알림 열기"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/></svg><span id="sidebarNotificationCount" class="side-quick-count" hidden></span></button>
+        <button type="button" id="sideSupportButton" class="side-quick-button" title="모더·후원" aria-label="모더 후원 탭 열기"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 21s-9-5.7-9-11.5a5.1 5.1 0 0 1 9-3.2 5.1 5.1 0 0 1 9 3.2C21 15.3 12 21 12 21z"/></svg></button>
+      </div>
+      <div class="side-group-title archive-caption"><span>01</span> <span>아카이브</span><span class="side-rule"></span></div>
+      <nav class="archive-nav section-nav" aria-label="아카이브">
+        <button type="button" class="nav-link is-active" data-view="archive">
+          <span class="nav-icon">◈</span><span>아카이브</span>
+        </button>
+      </nav>
+      <div class="side-group-title operations-caption"><span>02</span> <span>작전 메뉴</span><span class="side-rule"></span></div>
+      <nav class="side-nav" aria-label="작전 메뉴">
+        <button type="button" class="nav-link nav-campaign" data-view="all" title="설치된 모든 캠페인">
+          <span class="nav-icon">▤</span><span class="nav-label"><span class="nav-short">모든</span><span class="nav-long"> 캠페인</span></span>
+        </button>
+        <button type="button" class="nav-link nav-campaign" data-view="wol" title="자유의 날개 캠페인">
+          <span class="nav-icon">▣</span><span class="nav-label"><span class="nav-short">자날</span><span class="nav-long"> 캠페인</span></span>
+        </button>
+        <button type="button" class="nav-link nav-campaign" data-view="hots" title="군단의 심장 캠페인">
+          <span class="nav-icon">◈</span><span class="nav-label"><span class="nav-short">군심</span><span class="nav-long"> 캠페인</span></span>
+        </button>
+        <button type="button" class="nav-link nav-campaign" data-view="lotv" title="공허의 유산 캠페인">
+          <span class="nav-icon">◇</span><span class="nav-label"><span class="nav-short">공유</span><span class="nav-long"> 캠페인</span></span>
+        </button>
+        <button type="button" class="nav-link nav-campaign" data-view="nova" title="노바 비밀 작전 캠페인">
+          <span class="nav-icon">✧</span><span class="nav-label"><span class="nav-short">노바</span><span class="nav-long"> 캠페인</span></span>
+        </button>
+        <button type="button" class="nav-link nav-campaign" data-view="dedicated" title="전용 캠페인">
+          <span class="nav-icon">✦</span><span class="nav-label"><span class="nav-short">전용</span><span class="nav-long"> 캠페인</span></span>
+        </button>
+      </nav>
+
+      <div class="sidebar-graphic" aria-hidden="true">
+        <div class="radar-ring r1"></div><div class="radar-ring r2"></div><div class="radar-ring r3"></div>
+        <div class="radar-symbol" id="radarGlyph">✧</div>
+        <div class="radar-pulse"></div>
+        <div class="radar-coordinates">SECTOR 07 / KO-RE</div>
+      </div>
+
+      <div class="side-group-title themes-caption"><span>03</span><span>화면 테마</span><span class="side-rule"></span></div>
+      <div class="theme-switcher" role="group" aria-label="화면 테마 선택">
+        <button type="button" class="theme-option is-active" data-set-theme="terran" aria-label="테란"><span class="theme-emblem" aria-hidden="true"><img src="assets/faction-identity/terran.png" alt=""></span><small>테란</small></button>
+        <button type="button" class="theme-option" data-set-theme="protoss" aria-label="프로토스"><span class="theme-emblem" aria-hidden="true"><img src="assets/faction-identity/protoss.png" alt=""></span><small>프로토스</small></button>
+        <button type="button" class="theme-option" data-set-theme="zerg" aria-label="저그"><span class="theme-emblem" aria-hidden="true"><img src="assets/faction-identity/zerg.png" alt=""></span><small>저그</small></button>
+        <button type="button" class="theme-option" data-set-theme="nova" aria-label="노바"><span class="theme-emblem" aria-hidden="true"><img src="assets/faction-identity/nova.png" alt=""></span><small>노바</small></button>
+      </div>
+      <button type="button" class="nav-link layout-nav-link" data-view="custom" title="화면 요소·색상 자유 편집">
+        <span class="nav-icon">▦</span><span class="nav-full-label">커스텀 편집</span><span class="nav-mini-label">편집</span>
+      </button>
+      <div class="side-group-title settings-caption"><span>04</span><span>환경설정</span><span class="side-rule"></span></div>
+      <nav class="settings-nav section-nav" aria-label="환경설정">
+        <button type="button" class="nav-link" data-view="settings">
+          <span class="nav-icon">⚙</span><span class="nav-full-label">환경 설정</span><span class="nav-mini-label">설정</span>
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="side-telemetry"><span class="live-dot"></span> <span id="systemStatus">모든 시스템 준비</span><b>ONLINE</b></div>
+        <small>시각·조작 테스트 전용<br>게임 및 설치 데이터 변경 없음</small>
+      </div>
+    </aside>
+
+    <main class="workspace" id="workspace">
+      <div class="workspace-header">
+        <div>
+          <div class="eyebrow section-eyebrow" id="sectionEyebrow">TACTICAL ARCHIVE / CAMPAIGN DIRECTORY</div>
+          <h1 id="workspaceTitle">캠페인 보관함 <span>작전 통제실</span></h1>
+          <p id="workspaceSubtitle">커스텀 캠페인을 빠르게 찾고 비교하는 미래형 격납고 UI 시안입니다.</p>
+        </div>
+        <div class="header-stats">
+          <div><small>클리어</small><strong id="statTotal">0<span>개</span></strong></div>
+          <div><small>총 플레이 시간</small><strong id="statPlayTime">0.0<span>시간</span></strong></div>
+          <div><small>설치 예시</small><strong id="statInstalled">05<span>개</span></strong></div>
+          <div class="network-readout"><small>격납고 연결</small><strong><span class="live-dot" aria-hidden="true"></span> 정상</strong></div>
+        </div>
+      </div>
+      <div class="activation-readout" id="activationReadout" aria-live="polite" hidden>
+        <span><b>현재 적용</b> <strong id="activeCampaignName">확인 중</strong></span>
+        <span><b>직전 적용</b> <strong id="previousCampaignName">확인 중</strong></span>
+      </div>
+
+      <section class="archive-embed" id="archiveEmbed" hidden aria-label="실제 커스텀 캠페인 아카이브">
+        <div class="archive-embed-toolbar">
+          <div class="archive-embed-heading"><span class="live-dot"></span><strong>커스텀 캠페인 아카이브</strong><small>실제 사이트 · 격납고 설치 연동</small></div>
+          <div class="archive-embed-actions" aria-label="아카이브 탐색">
+            <button type="button" data-archive-action="back" title="뒤로">뒤로</button>
+            <button type="button" data-archive-action="home" title="아카이브 홈">홈</button>
+            <button type="button" data-archive-action="reload" title="새로고침">새로고침</button>
+            <button type="button" data-archive-action="external" title="브라우저로 열기">외부 브라우저</button>
+            <button type="button" data-view="wol" title="설치된 자날 캠페인 보기">내 캠페인</button>
+          </div>
+        </div>
+        <div class="archive-embed-frame" id="archiveMount" role="group" aria-label="기존 캠페인 아카이브 웹페이지">
+          <div class="archive-loading"><span class="live-dot"></span>실제 아카이브를 연결하는 중입니다.</div>
+        </div>
+      </section>
+
+      <section class="hero" id="hero" aria-label="선택한 캠페인">
+        <div class="hero-image" id="heroImage"></div>
+        <div class="hero-field" aria-hidden="true">
+          <div class="hero-lens lens-1"></div>
+          <div class="hero-lens lens-2"></div>
+          <div class="crosshair">╋</div>
+        </div>
+        <div class="hero-topline"><span class="accent-square"></span><span id="heroKicker">FEATURED CAMPAIGN</span><span class="hero-number">C20 / 001</span></div>
+        <div class="hero-copy">
+          <span class="hero-tag" id="heroTag">선택된 작전</span>
+          <h2 id="heroTitle">레볼라이트</h2>
+          <p id="heroDescription">작전 설명을 불러오는 중입니다.</p>
+          <div class="hero-meta"><span>◈ 한국어 지원</span><span id="heroCategory">자날</span><span id="heroState">설치 예시</span><span id="heroUpdateBadge" class="update-indicator" hidden>업데이트</span></div>
+        </div>
+        <div class="focus-stack">
+        <div class="focus-details" id="focusDetails" aria-label="집중형 캠페인 상세 정보">
+          <div><small>제작자</small><strong id="focusAuthor">—</strong></div>
+          <div><small>분류</small><strong id="focusCategory">—</strong></div>
+          <div><small>설치 상태</small><strong id="focusInstalled">—</strong></div>
+        </div>
+        <div class="hero-records">
+          <div class="hero-missions"><small>완료 임무</small><strong id="focusMissions">—</strong></div>
+          <div id="heroPlayTime" class="hero-play-time" aria-live="polite"><small>플레이 시간</small><strong>기록 없음</strong></div>
+        </div>
+        </div>
+        <div class="hero-side-index"><span id="heroSideCaption">ARCHIVE / OPERATIONAL DATA</span> <span id="heroIndex">01—12</span></div>
+        <div class="hero-bottomline"><span class="scan-light"></span><span>CAMPAIGN DATA LINK ESTABLISHED</span><span>NO LIVE GAME CONNECTION</span></div>
+      </section>
+
+      <section class="action-strip" aria-label="선택된 캠페인 작업">
+        <button class="action-button action-primary" id="launchButton" type="button"><span class="action-icon">▶</span> <span id="primaryActionText">캠페인 적용</span> <small>테스트 안내</small></button>
+        <button class="action-button" id="installButton" type="button"><span class="action-icon">⇩</span> 설치·관리 <small>테스트 안내</small></button>
+        <button class="action-button" id="detailButton" type="button"><span class="action-icon">▤</span> 상세 정보 보기</button>
+        <button class="action-button" id="screenshotButton" type="button"><span class="action-icon"></span> 스크린샷 관리</button>
+        <button class="action-button" id="importZipButton" type="button"><span class="action-icon">⇧</span> ZIP 가져오기</button>
+        <span class="action-rail-label"><b id="actionCaption">QUICK OPERATIONS</b> <span>↘</span></span>
+      </section>
+
+      <section class="catalog-panel" id="catalogPanel">
+        <div class="catalog-toolbar">
+          <div class="catalog-heading"><div class="eyebrow" id="catalogEyebrow">MISSION DATABASE / INDEX</div><h3 id="catalogTitle">캠페인 목록 <span id="resultCount">12</span></h3></div>
+          <div class="toolbar-inputs">
+            <button id="favoriteButton" class="catalog-favorites" type="button" aria-label="즐겨찾기만 보기" title="즐겨찾기만 보기" aria-pressed="false">☆</button>
+            <label class="search-field" for="campaignSearch"><span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.6 15.6 5 5"/></svg></span><input id="campaignSearch" type="search" autocomplete="off" placeholder="캠페인 이름 · 제작자 검색" aria-label="캠페인 검색"><kbd>/</kbd></label>
+            <label class="select-field" id="categoryFilter"><span>분류</span><select id="campaignCategory" aria-label="캠페인 분류"><option value="all">전체</option><option value="자날">자날</option><option value="군심">군심</option><option value="공유">공유</option><option value="노바">노바</option><option value="전용">전용</option></select></label>
+            <label class="select-field"><span>정렬</span><select id="sortCampaigns" aria-label="정렬"><option value="playtime">플레이 시간순</option><option value="name">이름순</option><option value="popular">인기순</option></select></label>
+            <div class="view-mode" role="group" aria-label="목록 표시">
+              <button id="gridMode" class="is-active" type="button" aria-label="격자 보기" title="격자 보기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button><button id="listMode" type="button" aria-label="목록 보기" title="목록 보기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg></button>
+            </div>
+          </div>
+        </div>
+        <div class="content-columns">
+          <div class="campaign-list-region">
+            <div id="campaignList" class="campaign-grid" aria-label="캠페인 목록"></div>
+            <div id="emptyState" class="empty-state" hidden><span>⌕</span><strong>조건에 맞는 캠페인이 없습니다.</strong><p>검색어나 분류를 변경해 보세요.</p><button type="button" id="clearSearch">조건 초기화</button></div>
+          </div>
+          <aside class="detail-panel" id="detailPanel" aria-label="캠페인 상세 정보">
+            <div class="detail-top"><span><span class="live-dot"></span> SELECTED OPERATION</span><span id="detailOrdinal">01 / 12</span></div>
+            <div class="detail-art" id="detailArt"><span class="image-crosshair">⌖</span></div>
+            <div class="detail-body">
+              <div class="detail-category" id="detailCategory">자날 · 로그라이트</div>
+              <h3 id="detailTitle">레볼라이트</h3>
+              <p id="detailDescription">상세 설명을 불러오는 중입니다.</p>
+              <dl class="detail-stats">
+                <div><dt>제작</dt><dd id="detailAuthor">커뮤니티</dd></div>
+                <div><dt>분류</dt><dd id="detailType">자날</dd></div>
+                <div><dt>설치 상태</dt><dd id="detailInstalled">설치됨</dd></div>
+              </dl>
+              <div class="record-summary" id="recordSummary" aria-live="polite">
+                <div><small>플레이 시간</small><strong id="recordPlayTime">0.0시간</strong></div>
+                <div><small>완료 임무</small><strong id="recordMissions">기록 없음</strong></div>
+                <button type="button" id="recordDetails">기록 상세</button>
+              </div>
+              <span id="detailUpdateBadge" class="update-indicator detail-update" hidden>업데이트 있음</span>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="contact-grid" id="contactGrid" hidden aria-label="콘택트형 캠페인 화면">
+        <section class="contact-cell contact-selected" data-contact-cell="detail" aria-label="선택 캠페인 상세">
+          <div class="contact-heading"><span>SELECTED OPERATION</span><strong>상세 설명</strong></div>
+          <div class="contact-selected-art" id="contactArt"></div>
+          <h3 id="contactTitle">캠페인을 선택하세요</h3><p id="contactDescription"></p>
+          <dl class="contact-facts"><div><dt>제작</dt><dd id="contactAuthor">—</dd></div><div><dt>구분</dt><dd id="contactType">—</dd></div><div><dt>플레이 시간</dt><dd id="contactPlayTime">—</dd></div></dl>
+        </section>
+        <section class="contact-cell" data-contact-cell="wol" aria-label="자날 캠페인"><div class="contact-heading"><span>WINGS OF LIBERTY</span><strong>자날</strong></div><div class="contact-items" data-contact-items="wol"></div></section>
+        <section class="contact-cell" data-contact-cell="hots" aria-label="군심 캠페인"><div class="contact-heading"><span>HEART OF THE SWARM</span><strong>군심</strong></div><div class="contact-items" data-contact-items="hots"></div></section>
+        <section class="contact-cell" data-contact-cell="lotv" aria-label="공유 캠페인"><div class="contact-heading"><span>LEGACY OF THE VOID</span><strong>공유</strong></div><div class="contact-items" data-contact-items="lotv"></div></section>
+        <section class="contact-cell" data-contact-cell="nova" aria-label="노바 캠페인"><div class="contact-heading"><span>NOVA COVERT OPS</span><strong>노바</strong></div><div class="contact-items" data-contact-items="nova"></div></section>
+        <section class="contact-cell" data-contact-cell="dedicated" aria-label="전용 캠페인"><div class="contact-heading"><span>DEDICATED CAMPAIGNS</span><strong>전용 캠페인</strong></div><div class="contact-items" data-contact-items="dedicated"></div></section>
+      </section>
+
+      <section class="settings-panel" id="settingsPanel" hidden aria-label="화면 및 격납고 설정">
+        <div class="setting-title"><span class="eyebrow">CAMPAIGN HANGAR / DISPLAY OPTIONS</span><h2>화면 설정</h2><p id="settingExplanation">테마와 시각 효과를 조절합니다.</p></div>
+        <section class="optimization-settings" aria-labelledby="optimizationTitle">
+          <h3 id="optimizationTitle">최적화 설정</h3>
+          <div class="optimization-options">
+            <button type="button" id="optimizedMode" class="optimization-option" title="기존 WinForms 간편 화면으로 변경"><span class="optimization-glyph" aria-hidden="true">▤</span><strong>간편 UI</strong><small>기존 경량 화면</small></button>
+            <button type="button" id="contrastToggle" class="optimization-option" aria-pressed="false"><span class="optimization-glyph" aria-hidden="true">◐</span><strong>고대비 켜기</strong><small>화면 가독성</small></button>
+            <button type="button" id="introToggle" class="optimization-option" aria-pressed="true"><span class="optimization-glyph" aria-hidden="true">◴</span><strong>시작 로딩 화면: 켜짐</strong><small>적용·다운로드 진행 화면은 계속 표시합니다.</small></button>
+            <button type="button" id="workBrowseToggle" class="optimization-option" aria-pressed="false"><span class="optimization-glyph" aria-hidden="true">▣</span><strong>작업 진행: 전체 화면</strong><small>작은 진행창으로 앱을 둘러보며 기다릴 수 있습니다.</small></button>
+            <button type="button" id="motionToggle" class="optimization-option" aria-pressed="false"><span class="optimization-glyph" aria-hidden="true">≋</span><strong>모션 줄이기</strong><small>애니메이션 최소화</small></button>
+          </div>
+        </section>
+        <div class="setting-grid">
+          <div class="setting-tile layout-setting-tile" id="layoutSettings" aria-label="테마별 레이아웃 설정"></div>
+        </div>
+        <section id="hostSettings" class="host-settings" aria-label="격납고 관리 설정">
+          <h3>격납고 설정</h3>
+          <div class="host-settings-grid">
+            <div><small>스타크래프트 II</small><output id="hostGamePath">확인 중</output><button type="button" data-host-action="game">게임 경로 선택</button></div>
+            <div><small>캠페인 보관소</small><output id="hostStoragePath">확인 중</output><button type="button" data-host-action="storage">보관소 변경</button></div>
+            <div><small>ZIP 다운로드</small><output id="hostDownloadPath">확인 중</output><button type="button" data-host-action="downloads">다운로드 경로 변경</button></div>
+          </div>
+          <label><input type="checkbox" id="hostApplyConfirmation"> 캠페인 적용 전 확인창 표시</label>
+          <label><input type="checkbox" id="hostAutoApply"> 설치 후 자동 적용</label>
+          <label><input type="checkbox" id="hostAutoRemove"> 새 버전 적용 후 이전 버전 자동 삭제</label>
+          <div class="host-setting-actions">
+            <button type="button" data-host-action="site-refresh">사이트 목록 새로고침</button>
+            <button type="button" data-host-action="update-check">앱 업데이트 확인</button>
+            <button type="button" data-host-action="history">설치·다운로드 기록</button>
+            <button type="button" data-host-action="bank">뱅크 폴더 관리</button>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <div class="status-start"><span class="live-dot"></span><b id="statusTheme">TACTICAL UPLINK</b><span class="status-separator">/</span><span>CAMPAIGN HANGAR</span></div>
+      <div class="status-middle"><span>CASE 20 · UI 콘셉트 검증</span><span id="statusMessage">카드를 선택하거나 검색해 보세요.</span></div>
+      <div class="status-end"><span>TEST MODE · NO FILE CHANGES</span><span id="clock">--:--</span></div>
+    </footer>
+  </div>
+  <section id="updateBanner" class="update-banner" hidden role="status" aria-label="격납고 업데이트">
+    <div><strong>격납고 업데이트</strong><small id="updateBannerVersion"></small></div>
+    <button type="button" id="updateBannerInstall">업데이트</button>
+    <button type="button" id="updateBannerIgnore">무시</button>
+  </section>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-icon">◆</span><span id="toastMessage"></span></div>
+  <div id="zipDropOverlay" class="zip-drop-overlay" aria-live="polite" hidden>
+    <div class="zip-drop-card"><span aria-hidden="true">⇩</span><strong>캠페인 ZIP 설치·연결</strong>
+      <small>파일을 놓으면 기존 설치 검사와 확인 절차가 시작됩니다</small></div>
+  </div>
+  <div id="cardContextMenu" class="card-context-menu" role="menu" hidden>
+    <button type="button" role="menuitem" data-card-action="apply">적용</button>
+    <button type="button" role="menuitem" data-card-action="remove">삭제</button>
+    <button type="button" role="menuitem" data-card-action="update">업데이트</button>
+  </div>
+  <div class="manage-overlay" id="manageOverlay" hidden>
+    <div class="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="manageTitle">
+      <div class="manage-dialog-heading"><span>CAMPAIGN OPERATIONS</span><button type="button" id="manageClose" aria-label="관리 패널 닫기">×</button></div>
+      <div class="manage-dialog-intro">
+        <div id="manageCover" class="manage-dialog-cover" role="img" aria-label="선택 캠페인 표지"></div>
+        <div><small id="manageCategory">작전 정보</small><h2 id="manageTitle">선택된 캠페인</h2><p id="manageDescription"></p><strong id="manageState"></strong></div>
+      </div>
+      <div class="manage-actions">
+        <button type="button" data-manage-action="install">설치</button>
+        <button type="button" data-manage-action="update">업데이트</button>
+        <button type="button" data-manage-action="remove">설치 제거</button>
+        <button type="button" data-manage-action="versions">버전·폴더 관리</button>
+        <button type="button" data-manage-action="link">캠페인 연결</button>
+      </div>
+      <section id="manageActionPanel" class="manage-action-panel" hidden>
+        <div class="manage-action-panel-head"><span id="manageActionSymbol">◇</span><div><small>선택한 캠페인 관리</small><h3 id="manageActionTitle">관리 옵션</h3></div></div>
+        <p id="manageActionHelp"></p>
+        <div id="manageEmbeddedOptions" class="manage-embedded-options" hidden></div>
+        <div class="manage-action-footer"><button type="button" id="manageActionBack">뒤로</button><button type="button" id="manageActionConfirm">옵션 열기</button></div>
+      </section>
+    </div>
+  </div>
+  <div id="layoutEditor" class="layout-editor" hidden aria-label="사용자 레이아웃 편집기"></div>
+  <div id="recordOverlay" class="manage-overlay" hidden>
+    <div class="manage-dialog record-dialog" role="dialog" aria-modal="true" aria-labelledby="recordTitle">
+      <div class="manage-dialog-heading"><span>MISSION RECORDS</span><button type="button" id="recordClose" aria-label="플레이 기록 닫기">×</button></div>
+      <h2 id="recordTitle">플레이 기록</h2>
+      <div id="recordDetailsContent" class="record-details-content"></div>
+      <div class="record-actions"><button type="button" id="recordBankLink">완료 기록 뱅크 연결</button><button type="button" id="recordNewRun">새 회차 확인</button></div>
+      <div id="recordConfirm" class="record-confirm" hidden><p>새 회차로 확인하면 현재 뱅크를 새 기준으로 읽습니다. 기존 플레이 시간과 관측한 완료 기록은 보존됩니다.</p><button type="button" id="recordConfirmApply">새 회차 확인</button><button type="button" id="recordConfirmCancel">취소</button></div>
+    </div>
+  </div>
+  <div id="busyOverlay" class="busy-overlay" role="status" aria-live="polite" hidden>
+    <div class="busy-dialog"><span class="busy-orbit" aria-hidden="true"></span><strong id="busyTitle">캠페인 작업 중</strong><p id="busyElapsed">진행 시간 0초</p><small>기존 격납고의 안전한 처리 절차를 진행하고 있습니다.</small></div>
+  </div>
+</body>
+</html>

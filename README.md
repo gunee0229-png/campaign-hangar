@@ -1,0 +1,109 @@
+# 커캠 격납고 (Campaign Hangar)
+
+스타크래프트 II 커스텀 캠페인을 찾아 설치하고, 적용·복원하며 관리하는 Windows 앱입니다.
+공식 SC2 Custom Campaign Manager가 아닌 **SC2CCM 기반 비공식 파생 프로젝트**입니다.
+
+## 다운로드와 설치
+
+1. [최신 버전 다운로드](https://github.com/gunee0229-png/campaign-hangar/releases/latest)에서 `CampaignHangar-Setup-0.2.0.exe`를 받습니다.
+2. 실행 중인 격납고를 닫고 설치 파일을 실행합니다. 사용자 폴더에 설치되며 관리자 권한은 요구하지 않습니다.
+3. 시작 메뉴의 **커캠 격납고**를 실행합니다.
+4. 처음 실행할 때 **설정 → 게임 경로 선택**에서 `StarCraft II.exe`가 있는 폴더를 지정합니다.
+5. WebView2가 없다면 시작 준비 화면에서 Microsoft 공식 구성요소 설치 여부를 확인합니다.
+
+필요 환경: Windows 10/11 x64, .NET Framework 4.8, Microsoft Edge WebView2 Runtime.
+실행 파일은 코드 서명되지 않았습니다. Windows가 경고할 수 있으므로 배포자와 다운로드 주소를 확인하세요.
+보안 경고를 무조건 해제하거나 보안 프로그램을 끄지 마세요.
+
+설치 위치는 `%LOCALAPPDATA%\Programs\CampaignHangar`입니다.
+설정은 앱 설치 폴더와 별도로 저장합니다. 개발판과 일반 앱은 설정 프로필이 분리됩니다.
+ZIP은 자동 업데이트용이며, 직접 실행하려면 별도 폴더에 **전체 압축 해제**한 뒤
+`CampaignHangarSetup.exe`를 실행합니다. EXE 한 개만 꺼내 실행하면 안 됩니다.
+
+## 캠페인 사용
+
+1. **아카이브**에서 캠페인을 찾아 상세 정보와 제작자 안내를 확인합니다.
+2. **설치·관리**에서 배포 자료를 확인하거나, 받은 ZIP을 **ZIP 가져오기** 또는 파일 드래그로 등록합니다.
+3. 메타데이터가 없는 ZIP은 연결·설치 확인이 필요할 수 있습니다. 지원 여부를 임의로 판단해 자동 실행하지 않습니다.
+4. 목록에서 캠페인을 고르고 **캠페인 적용**을 누릅니다. 게임을 종료하고, 임무·메뉴에서 나온 상태인지 먼저 확인하세요.
+5. 진행이 끝난 뒤 게임을 실행합니다. 전용 캠페인은 해당 캠페인의 실행·에피소드 안내를 따릅니다.
+6. 기본 게임으로 돌아가려면 **설정 → 기본 게임 복원**을 사용합니다.
+
+다른 캠페인 관리자와 동시에 게임 파일을 바꾸지 마세요.
+외부에서 수정된 적용 파일이 감지되면 데이터 보호를 위해 전환이 거부될 수 있습니다.
+적용·복원 중에는 앱을 강제 종료하거나 게임·보관소 폴더를 직접 수정하지 마세요.
+작업 중단은 중단 버튼이 제공될 때만 사용하세요.
+
+## 화면과 편집
+
+- 테란·프로토스·저그·노바 버튼으로 테마를 바꿉니다. 기본형·집중형·목록형·콘택트형은 화면 설정에서 선택합니다.
+- **커스텀 편집**에서 배치·색상·문구를 수정합니다. 저장을 눌러야 확정됩니다.
+- 편집 중 자유배치를 켜면 격자를 보며 이동·크기를 맞출 수 있습니다. 고정한 패널은 보호합니다.
+- 편집창 X를 처음 누르면 미저장 변경의 저장 여부를 묻고, 다시 누르면 저장하지 않고 닫습니다.
+- 콘택트형의 목록 한 줄 카드 수는 1~3개입니다. 목록 끝에서 휠을 더 돌리면 전체 화면으로 이어집니다.
+- 작업 화면의 **둘러보기**는 작업을 계속하면서 작은 진행창만 남깁니다. **크게 보기**로 되돌릴 수 있습니다.
+- 설정의 **작업 진행: 작은 창**을 선택하면 다음 작업도 작은 진행창으로 시작합니다.
+- 후원 버튼은 아카이브의 모더·후원 페이지를 엽니다. 앱이 자동 결제하지 않습니다.
+
+## 앱 업데이트
+
+개발판 코드가 바뀌었다고 일반 앱에 즉시 업데이트가 표시되지는 않습니다.
+검증한 일반 버전을 GitHub Releases에 정식 공개해야 합니다.
+
+1. 시작 시 또는 **설정 → 앱 업데이트 확인**에서 새 버전을 확인합니다.
+2. 새 버전 안내에서 업데이트를 선택합니다. 자동으로 게임 캠페인을 적용하지 않습니다.
+3. 앱 ZIP의 SHA-256, 파일 목록, 버전, 일반/개발 채널을 검사합니다.
+4. 실행 중인 앱을 종료한 뒤 앱 파일만 교체하고 다시 실행합니다. 캠페인·뱅크·세이브·설정은 교체 대상이 아닙니다.
+5. 교체 실패 시 이전 앱 파일을 복구합니다. 오류 화면에 표시된 임시 폴더에는 복구 자료가 남습니다.
+
+공식 배포 정보: 이 저장소의 `Releases → latest.json`.
+일반 앱은 개발판 업데이트를 받지 않습니다.
+다운로드가 느리거나 실패하면 현재 앱을 계속 사용할 수 있습니다.
+
+## 느리거나 실패할 때
+
+- 아카이브와 외부 배포처는 네트워크·서버 상태에 따라 수초 이상 걸릴 수 있습니다.
+- 적용은 다운로드와 별개로 로컬 무결성 검사·백업·파일 이동을 수행합니다. 파일 수와 저장장치 속도에 영향을 받습니다.
+- 보관소의 `last-activation-timing.json`에는 마지막 적용 단계별 소요시간과 완료 여부가 저장됩니다.
+- 문제가 있으면 [Issues](https://github.com/gunee0229-png/campaign-hangar/issues)에 앱 버전, 작업 단계, 오류 문구를 남겨 주세요.
+  개인 경로·계정·세이브·뱅크 전체는 공개하지 마세요.
+- 삭제는 앱을 종료한 뒤 설치 폴더와 시작 메뉴 바로가기를 제거합니다.
+  캠페인·설정도 삭제할지는 별도로 결정하세요. 앱 제거를 위해 보관소를 지울 필요는 없습니다.
+
+## 소스 빌드와 검사
+
+소스의 `Launcher` 폴더에서 실행합니다. Windows의 .NET Framework 4.8 C# 컴파일러와 PowerShell을 사용합니다.
+필수 WebView2 SDK 라이브러리는 `Launcher/vendor`에 라이선스와 함께 포함됩니다.
+
+```bat
+build.cmd "C:\Build\CampaignHangar" release
+```
+
+개발판은 두 번째 인자를 `development`로 바꿉니다.
+테마 기능은 두 빌드 모두에 포함되며 업데이트 채널과 사용자 설정 위치만 분리합니다.
+
+```bat
+C:\Build\CampaignHangar\CampaignHangar.exe --self-test
+C:\Build\CampaignHangar\CampaignHangarUpdater.exe --self-test
+C:\Build\CampaignHangar\CampaignHangar.exe --ui-hub-scroll-check C:\Build\new-isolated-check
+```
+
+격리 검사 폴더는 새 경로를 사용합니다. 실제 게임에 적용하는 성능 시험은 자동 실행하지 않습니다.
+
+```powershell
+.\package-app-release.ps1 -AppDirectory C:\Build\CampaignHangar -OutputDirectory C:\Build\new-package -Notes "변경 내용"
+.\build-installer.cmd C:\Build\CampaignHangar C:\Build\new-package C:\Build\new-package\CampaignHangar-Setup.exe
+```
+
+버전은 `Launcher/AppUpdate.cs`에서 올립니다. ZIP과 `latest.json`을 같은 버전의 `v<네 자리 버전>` 정식 릴리스에 올립니다.
+설치 EXE도 함께 첨부합니다. 개발판은 사전 릴리스에만 올리고 일반 앱의 최신 릴리스로 지정하지 않습니다.
+GitHub 업로드는 별도의 명시적 게시 작업이며 빌드만으로 자동 게시되지 않습니다.
+
+## 출처와 권리
+
+- 원본: [7thAce/SC2CCM](https://github.com/7thAce/SC2CCM), Copyright (c) 2022 7thAce and GiantGrantGames.
+- 원본 고지와 사용 조건은 `THIRD-PARTY-NOTICES.txt`, 원본 README는 `README-SC2CCM.md`에 보존합니다.
+- StarCraft II 및 관련 이미지·로고의 권리는 Blizzard Entertainment와 각 권리자에게 있습니다.
+- UI 이미지의 소스 코드 공개는 해당 이미지의 권리를 이전하거나 별도 재사용 권한을 부여하지 않습니다.
+- WebView2 SDK의 라이선스는 `Launcher/vendor/WebView2-1.0.4258.31/LICENSE.txt`를 확인하세요.
+- 게임·캠페인 패키지·개인 설정·뱅크·세이브는 이 저장소와 설치 파일에 포함하지 않습니다.

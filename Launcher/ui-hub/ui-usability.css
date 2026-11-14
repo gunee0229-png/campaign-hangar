@@ -1,0 +1,78 @@
+.sidebar {scrollbar-width:none!important;-ms-overflow-style:none;}
+.sidebar::-webkit-scrollbar {display:none!important;width:0!important;height:0!important;}
+.quick-resize {position:absolute;display:block;z-index:45;touch-action:none;user-select:none;}
+.quick-resize-e {right:0;top:0;bottom:0;width:7px;cursor:ew-resize;}
+.quick-resize-s {bottom:0;left:0;right:0;height:7px;cursor:ns-resize;}
+.quick-resize-se {bottom:0;right:0;width:12px;height:12px;cursor:nwse-resize;}
+.quick-resize:hover {background:rgba(var(--accent-rgb),.16);}
+body[data-layout-editing="true"][data-layout-free="true"] .workspace {
+  background-image:linear-gradient(to right,rgba(var(--accent-rgb),.16) 1px,transparent 1px),
+    linear-gradient(to bottom,rgba(var(--accent-rgb),.16) 1px,transparent 1px);
+  background-size:var(--ui-free-grid-x) var(--ui-free-grid-y);background-attachment:local;}
+#detailPanel,#detailArt,#contactArt {position:relative;}
+body[data-layout-editing="true"] .quick-resize,
+body[data-layout-free="true"] .quick-resize {display:none!important;}
+.sidebar>.quick-resize-se,#hero>.quick-resize-e {display:none;}
+body[data-layout-menu="left"] .sidebar>.quick-resize-s,
+body[data-layout-menu="right"] .sidebar>.quick-resize-s,
+body[data-layout-menu="top"] .sidebar>.quick-resize-e,
+body[data-layout-menu="bottom"] .sidebar>.quick-resize-e {display:none;}
+body[data-layout-menu="right"] .sidebar>.quick-resize-e {left:0;right:auto;}
+body[data-layout-menu="bottom"] .sidebar>.quick-resize-s {top:0;bottom:auto;}
+body[data-layout-detail="right"] #detailPanel>.quick-resize-e,
+body[data-layout-detail="right"] #detailPanel>.quick-resize-se {left:0;right:auto;}
+body[data-layout-free="false"] #hero {
+  height:min(var(--ui-hero-height),clamp(145px,25vh,280px))!important;
+  min-height:145px!important;flex:none!important;}
+body[data-layout-free="false"][data-layout-preset="focus"] #hero {
+  height:min(var(--ui-hero-height),clamp(210px,27vh,280px))!important;min-height:210px!important;}
+body[data-layout-preset="focus"] .focus-stack {
+  top:66px;bottom:auto;justify-content:flex-start;gap:15px;width:40%;right:35px;}
+body[data-layout-preset="focus"] #hero .hero-copy {padding:42px 26px 20px!important;}
+body[data-layout-preset="focus"] #hero .hero-copy h2 {font-size:clamp(22px,2.3vw,32px);}
+body[data-layout-preset="focus"] #hero .hero-copy p {max-height:95px!important;font-size:12px;line-height:1.65!important;}
+body[data-layout-preset="focus"] .hero-records strong {font-size:20px!important;}
+body[data-layout-preset="focus"] #focusDetails>div:has(#focusInstalled) {display:none!important;}
+body[data-layout-free="false"] .contact-cell {max-width:100%;box-sizing:border-box;}
+body[data-layout-preset="base"] #detailArt {height:auto;min-height:116px;flex:1 0 116px;
+  background-size:contain!important;background-position:center!important;background-repeat:no-repeat!important;}
+.editor-window-page .layout-editor-header {background:var(--bg)!important;
+  border-bottom:0;padding:10px 0 14px;}
+.editor-window-page .layout-editor-header strong {color:var(--text);}
+.editor-window-page .layout-editor-header small {color:var(--dim);}
+.editor-window-page .layout-editor-header small {white-space:nowrap;}
+.boot-work-toolbar {position:absolute;top:22px;right:28px;z-index:5;}
+.boot-work-toolbar[hidden] {display:none;}
+.boot.is-compact-work {inset:auto 18px 44px auto;width:min(320px,calc(100vw - 36px));height:340px;border:1px solid var(--accent);border-radius:10px;box-shadow:0 12px 32px #0009;}
+.boot.is-compact-work .boot-scene,.boot.is-compact-work .boot-bottom {display:none;}
+.boot.is-compact-work .boot-center {top:54px;bottom:12px;left:12px;right:12px;width:auto!important;transform:none;text-align:left;padding:14px!important;overflow:auto;}
+.boot.is-compact-work .boot-headline {font-size:20px!important;}
+.boot.is-compact-work .boot-subhead {margin:8px 0 12px;overflow-wrap:anywhere;}
+.boot.is-compact-work .boot-work-toolbar {top:10px;right:14px;}
+body.work-browsing #archiveMount {width:calc(100% - 340px);}
+body:is([data-layout-menu="top"],[data-layout-menu="bottom"]) .sidebar>.archive-nav>.nav-link {
+  width:100%!important;max-width:none!important;min-width:0!important;box-sizing:border-box;}
+.editor-window-page .layout-editor {background:var(--bg)!important;}
+.action-rail-label>span {display:inline-flex;vertical-align:middle;margin-left:6px;}
+.action-rail-label>b {vertical-align:middle;}
+body[data-layout-preset="contact"]:is([data-layout-menu="top"],[data-layout-menu="bottom"]) .sidebar>.archive-nav,
+body[data-layout-preset="contact"]:is([data-layout-menu="top"],[data-layout-menu="bottom"]) .sidebar>.side-nav,
+body[data-layout-preset="contact"]:is([data-layout-menu="top"],[data-layout-menu="bottom"]) .sidebar>.settings-nav,
+body[data-layout-preset="contact"]:is([data-layout-menu="top"],[data-layout-menu="bottom"]) .sidebar>.layout-nav-link {
+  flex:1 1 0!important;max-width:none!important;width:auto!important;min-width:76px!important;}
+body[data-layout-preset="contact"]:is([data-layout-menu="top"],[data-layout-menu="bottom"]) .sidebar>.theme-switcher {
+  flex:1.4 1 200px!important;min-width:154px!important;max-width:360px!important;width:auto!important;}
+body[data-layout-preset="contact"]:is([data-layout-menu="top"],[data-layout-menu="bottom"]) .sidebar .nav-link {
+  min-height:42px!important;white-space:nowrap!important;}
+body[data-menu-shape="protoss"] .nav-link {
+  isolation:isolate;clip-path:none!important;background:transparent!important;border-color:transparent!important;box-shadow:none!important;}
+body[data-menu-shape="protoss"] .nav-link::before,
+body[data-menu-shape="protoss"] .nav-link::after {
+  content:"";position:absolute;pointer-events:none;z-index:-1;clip-path:var(--menu-cut);}
+body[data-menu-shape="protoss"] .nav-link::before {inset:0;background:transparent;}
+body[data-menu-shape="protoss"] .nav-link::after {inset:1.5px;background:linear-gradient(90deg,var(--menu),var(--menuEnd));}
+body[data-menu-shape="protoss"] .nav-link.is-active::before {background:var(--selectedColor);}
+body[data-menu-shape="protoss"] .nav-link.is-active {border-color:transparent!important;box-shadow:none!important;}
+body[data-menu-shape="protoss"] .nav-link:hover::before {background:var(--borderColor);}
+body[data-menu-shape="protoss"] .nav-link.is-active::after {
+  background:linear-gradient(90deg,color-mix(in srgb,var(--selectedColor) 18%,var(--menu)),var(--menuEnd));}

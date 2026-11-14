@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self'">
+  <title>커스텀 편집 · 커캠 격납고</title>
+  <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="hub-features.css">
+  <link rel="stylesheet" href="ui-refinements.css">
+  <link rel="stylesheet" href="ui-corrections.css">
+  <link rel="stylesheet" href="ui-usability.css">
+</head>
+<body class="editor-window-page" data-theme="terran">
+  <main id="editorContent" class="layout-editor" aria-label="커스텀 편집">
+    <p>현재 화면의 편집 설정을 불러옵니다.</p>
+  </main>
+  <script>
+  (function(){
+    "use strict";
+    var root=document.getElementById("editorContent"),bridge=window.chrome&&window.chrome.webview;
+    function send(value){if(bridge)bridge.postMessage(JSON.stringify(value));}
+    function field(node,preview){
+      if(node.dataset.layoutField)send({action:"field",key:node.dataset.layoutField,value:node.value});
+      else if(node.dataset.layoutRange)send({action:"range",key:node.dataset.layoutRange,value:node.value,preview:preview});
+      else if(node.dataset.layoutColor)send({action:"color",key:node.dataset.layoutColor,value:node.value,preview:preview});
+      else if(node.dataset.layoutText)send({action:"text",key:node.dataset.layoutText,value:node.value});
+      else if(node.id==="layoutAllThemes")send({action:"all",value:node.checked});
+    }
+    root.addEventListener("input",function(e){
+      if(e.target.matches('[data-layout-range],[data-layout-color]'))field(e.target,true);
+    });
+    root.addEventListener("change",function(e){field(e.target,false);});
+    root.addEventListener("click",function(e){
+      var node=e.target.closest("[data-edit-action],[data-close-choice]");
+      if(!node)return;
+      if(node.dataset.closeChoice)send({action:"choice",value:node.dataset.closeChoice});
+      else send({action:"button",value:node.dataset.editAction});
+    });
+    document.addEventListener("keydown",function(e){
+      if(e.key==="Escape"){e.preventDefault();send({action:"close"});}
+      if((e.ctrlKey||e.metaKey)&&!e.target.matches("input,select,textarea")){
+        if(e.key.toLowerCase()==="z"){e.preventDefault();send({action:"button",value:e.shiftKey?"redo":"undo"});}
+        if(e.key.toLowerCase()==="y"){e.preventDefault();send({action:"button",value:"redo"});}
+      }
+    });
+    if(bridge){
+      bridge.addEventListener("message",function(event){
+        var state=event.data;if(!state||typeof state.html!=="string")return;
+        document.body.dataset.theme=state.theme;
+        Object.keys(state.colors||{}).forEach(function(key){document.body.style.setProperty(key,state.colors[key]);});
+        var scroll=document.documentElement.scrollTop;
+        root.innerHTML=state.html;
+        document.documentElement.scrollTop=scroll;
+        var confirm=root.querySelector("#layoutExitConfirm");
+        if(confirm&&!confirm.hidden) {
+          confirm.scrollIntoView({block:"center"});
+          var yes=confirm.querySelector("[data-close-choice=yes]");if(yes)yes.focus();
+        }
+      });
+      send({action:"ready"});
+    }
+  })();
+  </script>
+</body>
+</html>
