@@ -451,9 +451,8 @@ namespace CampaignHangar
                         catch (Exception) { }
                         MessageBox.Show("격납고 저장 폴더에 접근할 수 없습니다.\n\n" +
                             "캠페인 보관소: " + storagePath + "\n\n" +
-                            "해당 폴더에 현재 Windows 계정의 읽기·쓰기 권한이 있는지 확인해 주세요. " +
-                            "게임이 Program Files에 설치된 경우 보관소와 다운로드는 별도 사용자 폴더에 두는 것이 안전합니다.\n\n" +
-                            "기존 보관소와 경로 설정은 변경하지 않았습니다.\n상세: " + error.Message,
+                            "격납고를 종료하고 실행 파일을 우클릭해 '관리자 권한으로 실행'한 뒤 다시 시도해 주세요.\n" +
+                            "기존 보관소와 경로 설정은 다른 곳으로 변경하지 않았습니다.\n상세: " + error.Message,
                             "보관소·다운로드 폴더 접근 거부", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return 1;
                     }

@@ -110,12 +110,47 @@ namespace CampaignHangar
     {
         public const string Site = "https://sc2-campaign-archive.ddaheuk.workers.dev";
         public static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 16000000 };
+        // Windows MAX_PATH is still enforced on some PCs, even when another
+        // PC running the same build has LongPathsEnabled turned on. Use the
+        // extended Win32 path only at the IO boundary, while keeping normal
+        // absolute paths for safety checks, UI, manifests and comparisons.
+        public static string IoPath(string path)
+        {
+            if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) return path;
+            string full;
+            try { full = Path.GetFullPath(path); }
+            catch (PathTooLongException)
+            {
+                // Only an already absolute, canonical path may bypass the
+                // legacy managed length guard. In particular, never accept
+                // relative dot segments in ZIP-derived paths here.
+                if (!Path.IsPathRooted(path) || path.Split('\\').Any(p => p == "." || p == "..")) throw;
+                full = path;
+            }
+            return full.StartsWith(@"\\", StringComparison.Ordinal)
+                ? @"\\?\UNC\" + full.Substring(2) : @"\\?\" + full;
+        }
+        public static string DisplayPath(string path)
+        {
+            if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) return @"\\" + path.Substring(8);
+            if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) return path.Substring(4);
+            return path;
+        }
+        public static string[] FilesRecursively(string directory, string pattern)
+        {
+            return Directory.GetFiles(IoPath(directory), pattern, SearchOption.AllDirectories)
+                .Select(DisplayPath).ToArray();
+        }
+        public static string[] Entries(string directory)
+        {
+            return Directory.GetFileSystemEntries(IoPath(directory)).Select(DisplayPath).ToArray();
+        }
         public static string Hash(string file)
         { return Hash(file, System.Threading.CancellationToken.None); }
         public static string Hash(string file, System.Threading.CancellationToken cancellation, Action<long, long> progress = null)
         {
             cancellation.ThrowIfCancellationRequested();
-            using (var stream = File.OpenRead(file))
+            using (var stream = File.OpenRead(IoPath(file)))
             using (var sha = SHA256.Create())
             {
                 byte[] digest;
@@ -141,33 +176,52 @@ namespace CampaignHangar
                 return BitConverter.ToString(digest).Replace("-", "").ToLowerInvariant();
             }
         }
-        public static T Read<T>(string file) { return Json.Deserialize<T>(File.ReadAllText(file, Encoding.UTF8)); }
+        public static T Read<T>(string file) { return Json.Deserialize<T>(File.ReadAllText(IoPath(file), Encoding.UTF8)); }
         public static void Write(string file, object value)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(file));
+            Directory.CreateDirectory(IoPath(Path.GetDirectoryName(file)));
             string temp = file + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(temp, Json.Serialize(value), new UTF8Encoding(false));
-            if (File.Exists(file)) File.Replace(temp, file, null);
-            else File.Move(temp, file);
+            File.WriteAllText(IoPath(temp), Json.Serialize(value), new UTF8Encoding(false));
+            if (File.Exists(IoPath(file))) File.Replace(IoPath(temp), IoPath(file), null);
+            else File.Move(IoPath(temp), IoPath(file));
         }
         public static string Under(string root, string relative)
         {
             if (String.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) || relative.Contains(":"))
                 throw new InvalidDataException("절대 경로 또는 비어 있는 경로는 사용할 수 없습니다.");
-            string prefix = Path.GetFullPath(root).TrimEnd('\\') + "\\";
-            string full = Path.GetFullPath(Path.Combine(prefix, relative.Replace('/', '\\')));
+            string prefix = DisplayPath(IoPath(root)).TrimEnd('\\') + "\\";
+            string full;
+            try { full = Path.GetFullPath(Path.Combine(prefix, relative.Replace('/', '\\'))); }
+            catch (PathTooLongException)
+            {
+                // Path.GetFullPath on older .NET/Windows configurations can
+                // reject the absolute length before IO. Normalize relative
+                // segments inside this known root without losing containment.
+                var segments = new List<string>();
+                foreach (string part in relative.Replace('/', '\\').Split('\\'))
+                {
+                    if (part.Length == 0 || part == ".") continue;
+                    if (part == "..")
+                    {
+                        if (segments.Count == 0) throw new InvalidDataException("대상 폴더 밖으로 나가는 경로입니다.");
+                        segments.RemoveAt(segments.Count - 1);
+                    }
+                    else segments.Add(part);
+                }
+                full = prefix + String.Join("\\", segments);
+            }
             if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("대상 폴더 밖으로 나가는 경로입니다.");
             for (string p = full; p != null && p.Length >= prefix.Length - 1; p = Path.GetDirectoryName(p))
-                if ((Directory.Exists(p) || File.Exists(p)) &&
-                    (File.GetAttributes(p) & FileAttributes.ReparsePoint) != 0)
+                if ((Directory.Exists(IoPath(p)) || File.Exists(IoPath(p))) &&
+                    (File.GetAttributes(IoPath(p)) & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidDataException("연결된 폴더·파일은 안전하게 처리할 수 없습니다.");
             return full;
         }
         public static void Copy(string source, string destination)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(destination));
-            File.Copy(source, destination, true);
+            Directory.CreateDirectory(IoPath(Path.GetDirectoryName(destination)));
+            File.Copy(IoPath(source), IoPath(destination), true);
         }
         public static List<Campaign> ParseCatalogue(string text)
         {
@@ -575,10 +629,10 @@ namespace CampaignHangar
         }
         static void CheckRemovalTree(string directory)
         {
-            foreach (string child in Directory.GetFileSystemEntries(directory))
+            foreach (string child in Data.Entries(directory))
             {
                 string safe = Data.Under(directory, Path.GetFileName(child));
-                if (Directory.Exists(safe)) CheckRemovalTree(safe);
+                if (Directory.Exists(Data.IoPath(safe))) CheckRemovalTree(safe);
             }
         }
         Dictionary<string, string> SiteLinks()
@@ -777,18 +831,18 @@ namespace CampaignHangar
             if (progress != null) progress(new WorkProgress("ZIP 확인값 계산 중"));
             string versionKey = Data.Hash(zipPath);
             string final = Data.Under(packages, id + "\\versions\\" + versionKey);
-            if (Directory.Exists(final))
+            if (Directory.Exists(Data.IoPath(final)))
                 throw new InvalidOperationException("같은 ZIP이 이미 보관돼 있습니다. 기존 버전은 변경하지 않습니다.");
             string manifest = ManifestPath(id);
             byte[] previousManifest = File.Exists(manifest) ? File.ReadAllBytes(manifest) : null;
             bool published = false, manifestChanged = false;
             string stage = Path.Combine(Root, "import-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(stage);
+            Directory.CreateDirectory(Data.IoPath(stage));
             try
             {
             string payload = Path.Combine(stage, "payload");
-            Directory.CreateDirectory(payload);
-            using (var archive = ZipFile.OpenRead(zipPath))
+            Directory.CreateDirectory(Data.IoPath(payload));
+            using (var archive = ZipFile.OpenRead(Data.IoPath(zipPath)))
             {
                 if (archive.Entries.Count > 100000) throw new InvalidDataException("ZIP 항목이 너무 많습니다.");
                 long expanded = 0;
@@ -801,16 +855,16 @@ namespace CampaignHangar
                     if (!seen.Add(destination)) throw new InvalidDataException("ZIP에 중복 경로가 있습니다.");
                     expanded = checked(expanded + entry.Length);
                     if (expanded > 16L * 1024 * 1024 * 1024) throw new InvalidDataException("ZIP 해제 크기가 16GiB를 초과합니다.");
-                    if (String.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(destination); continue; }
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
-                    entry.ExtractToFile(destination, false);
+                    if (String.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(Data.IoPath(destination)); continue; }
+                    Directory.CreateDirectory(Data.IoPath(Path.GetDirectoryName(destination)));
+                    entry.ExtractToFile(Data.IoPath(destination), false);
                     if (progress != null) progress(new WorkProgress("ZIP 압축 해제 중", ++extracted, extractCount));
                 }
             }
-            string[] metadata = Directory.GetFiles(payload, "metadata.txt", SearchOption.AllDirectories);
+            string[] metadata = Data.FilesRecursively(payload, "metadata.txt");
             if (metadata.Length != 1) throw new InvalidDataException("metadata.txt가 정확히 한 개 있는 CCM ZIP만 지원합니다. 원본 ZIP은 보존됩니다.");
             Campaign item;
-            using (var reader = new StreamReader(metadata[0], Encoding.UTF8)) item = ReadMetadata(reader);
+            using (var reader = new StreamReader(Data.IoPath(metadata[0]), Encoding.UTF8)) item = ReadMetadata(reader);
             item.id = id; item.versionKey = versionKey; item.sourceFileName = Path.GetFileName(zipPath);
             if (expectedSlot != null && item.slot != expectedSlot)
                 throw new InvalidDataException("ZIP의 적용 대상과 선택한 사이트 캠페인의 적용 대상이 다릅니다. 연결할 캠페인을 다시 확인해 주세요.");
@@ -840,13 +894,14 @@ namespace CampaignHangar
             {
                 string artworkRoot = Path.Combine(packageRoot, "hangar");
                 var artwork = new[] { "thumbnail.png", "thumbnail.jpg", "thumbnail.jpeg" }
-                    .Select(name => Path.Combine(artworkRoot, name)).Where(File.Exists).ToArray();
+                    .Select(name => Path.Combine(artworkRoot, name)).Where(path => File.Exists(Data.IoPath(path))).ToArray();
                 if (artwork.Length > 1) throw new InvalidDataException("ZIP에는 격납고 썸네일을 한 장만 넣어 주세요.");
                 if (artwork.Length == 1)
                 {
-                    if (new FileInfo(artwork[0]).Length > 8 * 1024 * 1024)
+                    if (new FileInfo(Data.IoPath(artwork[0])).Length > 8 * 1024 * 1024)
                         throw new InvalidDataException("썸네일은 8MB 이하여야 합니다.");
-                    using (var image = Image.FromFile(artwork[0]))
+                    using (var stream = File.OpenRead(Data.IoPath(artwork[0])))
+                    using (var image = Image.FromStream(stream))
                         if (image.Width < 200 || image.Height < 100 || image.Width > 8192 || image.Height > 8192 ||
                             (long)image.Width * image.Height > 30000000)
                             throw new InvalidDataException("썸네일 이미지 해상도가 적절하지 않습니다.");
@@ -859,9 +914,9 @@ namespace CampaignHangar
                         @"hangar\" + Path.GetFileName(artwork[0]);
                 }
                 string creditsFile = Path.Combine(artworkRoot, "credits.json");
-                if (File.Exists(creditsFile))
+                if (File.Exists(Data.IoPath(creditsFile)))
                 {
-                    if (new FileInfo(creditsFile).Length > 8192)
+                    if (new FileInfo(Data.IoPath(creditsFile)).Length > 8192)
                         throw new InvalidDataException("격납고 제작자 정보는 8KB 이하여야 합니다.");
                     var credits = Data.Read<Campaign>(creditsFile);
                     if (credits == null) throw new InvalidDataException("격납고 제작자 정보가 비어 있습니다.");
@@ -874,7 +929,7 @@ namespace CampaignHangar
                 }
             }
             var destinations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string file in Directory.GetFiles(payload, "*", SearchOption.AllDirectories))
+            foreach (string file in Data.FilesRecursively(payload, "*"))
             {
                 bool inCampaign = file.StartsWith(parent + "\\", StringComparison.OrdinalIgnoreCase);
                 bool inSiblingMods = siblingMods != null && file.StartsWith(siblingMods, StringComparison.OrdinalIgnoreCase);
@@ -902,8 +957,8 @@ namespace CampaignHangar
                 if (progress != null) progress(new WorkProgress("캠페인 파일 검증·등록 중 · " + Path.GetFileName(file)));
             }
             Data.Write(Path.Combine(stage, "manifest.json"), item);
-            Directory.CreateDirectory(Path.GetDirectoryName(final));
-            Directory.Move(stage, final);
+            Directory.CreateDirectory(Data.IoPath(Path.GetDirectoryName(final)));
+            Directory.Move(Data.IoPath(stage), Data.IoPath(final));
             published = true;
             Data.Write(manifest, item);
             manifestChanged = true;
@@ -918,13 +973,13 @@ namespace CampaignHangar
                     else
                     {
                         string restore = manifest + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        File.WriteAllBytes(restore, previousManifest);
-                        File.Replace(restore, manifest, null);
+                        File.WriteAllBytes(Data.IoPath(restore), previousManifest);
+                        File.Replace(Data.IoPath(restore), Data.IoPath(manifest), null);
                     }
                 }
-                if (published) Directory.Delete(final, true);
+                if (published) Directory.Delete(Data.IoPath(final), true);
                 // This unique directory belongs only to this import attempt.
-                if (Directory.Exists(stage)) Directory.Delete(stage, true);
+                if (Directory.Exists(Data.IoPath(stage))) Directory.Delete(Data.IoPath(stage), true);
                 throw;
             }
         }
@@ -1024,12 +1079,12 @@ namespace CampaignHangar
         }
         static OwnedFile Node(string path, string relative, Dictionary<string,string> observedHashes = null)
         {
-            bool directory = Directory.Exists(path);
+            bool directory = Directory.Exists(Data.IoPath(path));
             string hash = null;
             if (directory)
             {
                 CheckRemovalTree(path);
-                var entries = Directory.GetFileSystemEntries(path).OrderBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)
+                var entries = Data.Entries(path).OrderBy(p => Path.GetFileName(p), StringComparer.OrdinalIgnoreCase)
                     .Select(p => {
                         var child = Node(p, "", observedHashes);
                         return (child.directory ? "D:" : "F:") + Path.GetFileName(p).ToLowerInvariant() + ":" + child.hash;
@@ -1037,7 +1092,7 @@ namespace CampaignHangar
                 using (var sha = SHA256.Create())
                     hash = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(String.Join("\n", entries)))).Replace("-", "").ToLowerInvariant();
             }
-            else if (File.Exists(path))
+            else if (File.Exists(Data.IoPath(path)))
             {
                 hash = Data.Hash(path);
                 if (observedHashes != null) observedHashes[path] = hash;
@@ -1046,16 +1101,16 @@ namespace CampaignHangar
         }
         static void CopyNode(string source, string destination)
         {
-            if (File.Exists(source)) { Data.Copy(source, destination); return; }
-            if (!Directory.Exists(source)) return;
-            CheckRemovalTree(source); Directory.CreateDirectory(destination);
-            foreach (string child in Directory.GetFileSystemEntries(source))
+            if (File.Exists(Data.IoPath(source))) { Data.Copy(source, destination); return; }
+            if (!Directory.Exists(Data.IoPath(source))) return;
+            CheckRemovalTree(source); Directory.CreateDirectory(Data.IoPath(destination));
+            foreach (string child in Data.Entries(source))
                 CopyNode(child, Data.Under(destination, Path.GetFileName(child)));
         }
         static void RemoveNode(string path)
         {
-            if (Directory.Exists(path)) { CheckRemovalTree(path); Directory.Delete(path, true); }
-            else if (File.Exists(path)) File.Delete(path);
+            if (Directory.Exists(Data.IoPath(path))) { CheckRemovalTree(path); Directory.Delete(Data.IoPath(path), true); }
+            else if (File.Exists(Data.IoPath(path))) File.Delete(Data.IoPath(path));
         }
         static void VerifyNode(string path, OwnedFile expected, Dictionary<string,string> observedHashes = null)
         {
@@ -1070,18 +1125,18 @@ namespace CampaignHangar
         }
         static void CheckLocks(string path)
         {
-            if (Directory.Exists(path))
+            if (Directory.Exists(Data.IoPath(path)))
             {
                 CheckRemovalTree(path);
-                foreach (string file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
-                    using (File.Open(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+                foreach (string file in Data.FilesRecursively(path, "*"))
+                    using (File.Open(Data.IoPath(file), FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
             }
-            else if (File.Exists(path)) using (File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+            else if (File.Exists(Data.IoPath(path))) using (File.Open(Data.IoPath(path), FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
         }
         string OriginalPath(OwnedFile file) { return Data.Under(Root, file.backup ?? "originals\\" + file.path); }
         void ValidateMovePath(string path, string gameRoot)
         {
-            string full = Path.GetFullPath(path);
+            string full = Data.DisplayPath(Data.IoPath(path));
             string prefix = Root.TrimEnd('\\') + "\\";
             if (full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             { Data.Under(Root, full.Substring(prefix.Length)); return; }
@@ -1092,18 +1147,19 @@ namespace CampaignHangar
         }
         static void MoveDeploymentNode(string source, string destination, OwnedFile expected)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(destination));
+            Directory.CreateDirectory(Data.IoPath(Path.GetDirectoryName(destination)));
             if (Storage.SameVolume(source, destination))
             {
-                if (expected.directory) Directory.Move(source, destination);
-                else File.Move(source, destination);
+                if (expected.directory) Directory.Move(Data.IoPath(source), Data.IoPath(destination));
+                else File.Move(Data.IoPath(source), Data.IoPath(destination));
             }
             else
             {
                 // A failed partial copy must never be mistaken for a completed move.
                 string partial = destination + ".moving-" + Guid.NewGuid().ToString("N");
                 try { CopyNode(source, partial); VerifyNode(partial, expected);
-                    if (expected.directory) Directory.Move(partial, destination); else File.Move(partial, destination);
+                    if (expected.directory) Directory.Move(Data.IoPath(partial), Data.IoPath(destination));
+                    else File.Move(Data.IoPath(partial), Data.IoPath(destination));
                 }
                 catch { RemoveNode(partial); throw; }
                 RemoveNode(source);
@@ -1113,7 +1169,7 @@ namespace CampaignHangar
         {
             var node = Node(source, "");
             if (node.hash == null) return;
-            if (File.Exists(destination) || Directory.Exists(destination))
+            if (File.Exists(Data.IoPath(destination)) || Directory.Exists(Data.IoPath(destination)))
                 throw new IOException("이동 대상에 파일이 이미 있습니다: " + destination);
             ValidateMovePath(source, journal.gameRoot); ValidateMovePath(destination, journal.gameRoot);
             journal.moves.Add(new DeploymentMove { source = source, destination = destination, node = node });
@@ -1159,8 +1215,8 @@ namespace CampaignHangar
             foreach (var file in old.files)
             {
                 string path = Target(gameRoot, file.path), hash;
-                if (!observedHashes.TryGetValue(path, out hash) && File.Exists(path)) hash = Data.Hash(path);
-                if (!File.Exists(path) || hash != file.hash)
+                if (!observedHashes.TryGetValue(path, out hash) && File.Exists(Data.IoPath(path))) hash = Data.Hash(path);
+                if (!File.Exists(Data.IoPath(path)) || hash != file.hash)
                     throw new InvalidOperationException("이전 활성 파일이 외부에서 변경됐습니다. 보호를 위해 전환하지 않습니다: " + file.path);
             }
             if (item != null && old.active == item.id && old.versionKey == item.versionKey && old.movedDeployment) return;
@@ -1182,7 +1238,8 @@ namespace CampaignHangar
             var previous = old.active == null ? null : Versions(old.active).Single(c => c.versionKey == old.versionKey);
             if (old.movedDeployment)
                 foreach (string relative in oldPaths)
-                    if (File.Exists(StoredPath(previous, "deploy\\" + relative)) || Directory.Exists(StoredPath(previous, "deploy\\" + relative)))
+                    if (File.Exists(Data.IoPath(StoredPath(previous, "deploy\\" + relative))) ||
+                        Directory.Exists(Data.IoPath(StoredPath(previous, "deploy\\" + relative))))
                         throw new IOException("반환할 보관소 위치에 파일이 이미 있습니다: " + relative);
             string backupGroup = "originals-v2\\" + Guid.NewGuid().ToString("N") + "\\";
             foreach (string relative in affected)
@@ -1255,7 +1312,7 @@ namespace CampaignHangar
             foreach (var owned in old.files)
             {
                 string p = Target(gameRoot, owned.path);
-                if (!File.Exists(p) || Data.Hash(p) != owned.hash)
+                if (!File.Exists(Data.IoPath(p)) || Data.Hash(p) != owned.hash)
                     throw new InvalidOperationException("이전 활성 파일이 외부에서 변경됐습니다. 보호를 위해 전환하지 않습니다: " + owned.path);
             }
             foreach (var node in old.managed ?? new List<OwnedFile>()) VerifyNode(Target(gameRoot, node.path), node);

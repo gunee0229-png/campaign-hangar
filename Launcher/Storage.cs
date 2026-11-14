@@ -99,55 +99,24 @@ namespace CampaignHangar
             gameRoot = Path.GetFullPath(gameRoot);
             if (!File.Exists(Path.Combine(gameRoot, "StarCraft II.exe")))
                 throw new IOException("StarCraft II.exe가 있는 게임 폴더를 먼저 선택해 주세요.");
-            string besideGame = Path.Combine(Directory.GetParent(gameRoot.TrimEnd('\\')).FullName, AppChannel.StorageFolder);
-            string userStorage = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                AppChannel.Profile, AppChannel.StorageFolder);
-            return WritableDestination(besideGame, userStorage);
+            return Path.Combine(Directory.GetParent(gameRoot.TrimEnd('\\')).FullName, AppChannel.StorageFolder);
         }
 
         public static string DefaultDownloadsForGame(string gameRoot)
         {
-            gameRoot = Path.GetFullPath(gameRoot);
-            string inGame = Path.Combine(gameRoot, AppChannel.DownloadsFolder);
-            string userDownloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                AppChannel.Profile, AppChannel.DownloadsFolder);
-            return WritableDestination(inGame, userDownloads);
+            return Path.Combine(Path.GetFullPath(gameRoot), AppChannel.DownloadsFolder);
         }
 
-        // When SC2 lives in Program Files or another protected location,
-        // ordinary accounts cannot create a sibling CampaignStorage or a
-        // Downloads directory inside the game. Probe only a temporary file in
-        // the nearest existing directory; never modify game files or ACLs.
-        internal static string WritableDestination(string preferred, string fallback)
+        // Permission errors must never silently switch the campaign library
+        // or downloads to a different directory. Tell the user how to retry.
+        internal static string AccessDeniedGuidance(string storagePath, string downloadsPath)
         {
-            return CanWriteAt(preferred) ? preferred : fallback;
-        }
-
-        internal static bool CanWriteAt(string desired)
-        {
-            string existing = Path.GetFullPath(desired);
-            while (!Directory.Exists(existing))
-            {
-                if (File.Exists(existing)) return false;
-                // Directory.Exists can return false for an inaccessible folder,
-                // not just a missing one. Do not mistake its writable parent
-                // for permission to write inside that protected directory.
-                try { File.GetAttributes(existing); return false; }
-                catch (UnauthorizedAccessException) { return false; }
-                catch (FileNotFoundException) { }
-                catch (DirectoryNotFoundException) { }
-                existing = Path.GetDirectoryName(existing);
-                if (String.IsNullOrEmpty(existing)) return false;
-            }
-            string probe = Path.Combine(existing, ".hangar-access-check-" + Guid.NewGuid().ToString("N"));
-            try
-            {
-                using (var file = new FileStream(probe, FileMode.CreateNew, FileAccess.Write,
-                    FileShare.None, 1, FileOptions.DeleteOnClose)) file.WriteByte(0);
-                return true;
-            }
-            catch (UnauthorizedAccessException) { return false; }
-            catch (IOException) { return false; }
+            return "캠페인 보관소 또는 다운로드 폴더에 접근할 권한이 없습니다.\n\n" +
+                "보관소: " + storagePath + "\n" +
+                "다운로드: " + downloadsPath + "\n\n" +
+                "격납고를 종료한 후 실행 파일을 우클릭하여 '관리자 권한으로 실행'한 뒤 " +
+                "같은 스타2 게임 경로를 다시 선택해 주세요.\n" +
+                "기존 보관소·다운로드 경로와 설정은 다른 위치로 자동 변경하지 않았습니다.";
         }
         static string BackupPath(string destination)
         {

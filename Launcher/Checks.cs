@@ -640,6 +640,33 @@ namespace CampaignHangar
                 var longFiles = Directory.GetFiles(Path.Combine(longLibrary.Root, "packages"), "*", SearchOption.AllDirectories);
                 Assert(longFiles.Any(file => file.Length > 260) && longLibrary.Installed(longItem.id) != null,
                     ".NET long-path handling imports immutable versions beyond MAX_PATH");
+                string explicitIoRoot = Path.Combine(root, "extended-win32-io");
+                string explicitIoFile = Path.Combine(explicitIoRoot, new string('a', 90),
+                    new string('b', 90), new string('c', 90), "source.txt");
+                Directory.CreateDirectory(Data.IoPath(Path.GetDirectoryName(explicitIoFile)));
+                File.WriteAllText(Data.IoPath(explicitIoFile), "extended path bytes");
+                string explicitIoCopy = Path.Combine(explicitIoRoot, "copied.txt");
+                Data.Copy(explicitIoFile, explicitIoCopy);
+                Assert(explicitIoFile.Length > 260 && Data.IoPath(explicitIoFile).StartsWith(@"\\?\") &&
+                    Data.DisplayPath(Data.IoPath(explicitIoFile)) == explicitIoFile &&
+                    Data.FilesRecursively(explicitIoRoot, "source.txt").Single() == explicitIoFile &&
+                    Data.Hash(explicitIoFile) == Data.Hash(explicitIoCopy),
+                    "extended Win32 paths read, enumerate, hash and copy deep CCM files without short-path aliases");
+                string deepJson = Path.Combine(Path.GetDirectoryName(explicitIoFile), "metadata.json");
+                Data.Write(deepJson, new StoragePreference { path = "original-path-preserved" });
+                Assert(Data.Read<StoragePreference>(deepJson).path == "original-path-preserved",
+                    "deep CCM metadata can be saved and read through extended paths");
+                string longGame = Path.Combine(root, "long-library-test-game");
+                Directory.CreateDirectory(longGame);
+                File.WriteAllText(Path.Combine(longGame, "StarCraft II.exe"), "fixture only");
+                longLibrary.Activate(longItem.id, longGame, true, null);
+                string longGameMission = Path.Combine(longGame, @"Maps\Campaign\mission.SC2Map");
+                Assert(File.Exists(longGameMission) && longLibrary.Current().active == longItem.id,
+                    "long archive deployment moves from deeply nested version folders into isolated fake game");
+                longLibrary.RestoreBase();
+                Assert(!File.Exists(longGameMission) && longLibrary.Current().active == null &&
+                    longLibrary.Installed(longItem.id) != null,
+                    "long archive deployment restores fake game and preserves installed ZIP identity");
                 var categorized = new[] { new Campaign { id = "a & b", name = "군심", @base = "군단의 심장", categories = new[] { "gallery", "rogue" }, thumbnail = "assets/test.webp" },
                     new Campaign { id = "other", name = "도구", categories = new[] { "developer" }, kind = "resource" } };
                 Assert(Catalogue.ToggleSelection(null, categorized[0]) == categorized[0] &&
@@ -756,22 +783,33 @@ namespace CampaignHangar
                 File.WriteAllText(blockedParent, "must not be replaced by a directory");
                 string protectedLibrary = Path.Combine(blockedParent, "CampaignStorage");
                 string protectedDownloads = Path.Combine(blockedParent, "Downloads");
-                string userFallback = Path.Combine(root, "safe-user-storage");
-                Assert(!Storage.CanWriteAt(protectedLibrary) && !Storage.CanWriteAt(protectedDownloads) &&
-                    Storage.WritableDestination(protectedLibrary, userFallback) == userFallback &&
-                    Storage.WritableDestination(protectedDownloads, userFallback) == userFallback &&
+                Assert(Storage.DefaultDownloadsForGame(fixtureGame) == channelDownloads &&
+                    Storage.DefaultForGame(fixtureGame) == gameStorage,
+                    "game library and downloads always keep their chosen paths without automatic redirection");
+                string deniedText = Storage.AccessDeniedGuidance(protectedLibrary, protectedDownloads);
+                Assert(deniedText.Contains("관리자 권한으로 실행") &&
+                    deniedText.Contains(protectedLibrary) && deniedText.Contains(protectedDownloads) &&
+                    deniedText.Contains("자동 변경하지 않았습니다") &&
                     File.ReadAllText(blockedParent) == "must not be replaced by a directory",
-                    "protected game-adjacent storage and Downloads select a user-writable fallback without touching protected paths");
-                Assert(Storage.CanWriteAt(gameStorage) &&
-                    Storage.WritableDestination(gameStorage, userFallback) == gameStorage &&
-                    Storage.DefaultDownloadsForGame(fixtureGame) == channelDownloads,
-                    "writable game-adjacent storage and game Downloads retain existing default behavior");
+                    "access denied message instructs admin restart and preserves original selected paths");
                 string configuredNoDownloads = Path.Combine(root, "game-with-legacy-download-setting.json");
                 Data.Write(configuredNoDownloads, new StoragePreference {
                     path = storageTarget, gameRoot = fixtureGame, downloadsPath = null });
                 Assert(Storage.ResolveDownloads(Path.Combine(root, "missing-downloads-preference.json"),
                     configuredNoDownloads) == Storage.DefaultDownloadsForGame(fixtureGame),
-                    "existing game selection without an explicit ZIP directory also probes writable fallback");
+                    "existing game selection without an explicit ZIP directory keeps game Downloads without redirect");
+                string deniedGame = Path.Combine(root, "blocked-game-storage-fixture");
+                Directory.CreateDirectory(deniedGame);
+                File.WriteAllText(Path.Combine(deniedGame, "StarCraft II.exe"), "fixture");
+                string deniedDownloads = Path.Combine(deniedGame, AppChannel.DownloadsFolder);
+                File.WriteAllText(deniedDownloads, "preserve incompatible target file");
+                string preferenceBeforeDenied = File.ReadAllText(preference);
+                Reject(() => Storage.SelectGame(storageTarget, deniedGame, preference),
+                    "an inaccessible downloads destination stops game selection instead of redirecting");
+                Assert(File.ReadAllText(deniedDownloads) == "preserve incompatible target file" &&
+                    File.ReadAllText(preference) == preferenceBeforeDenied &&
+                    !Directory.Exists(Path.Combine(root, "safe-user-storage")),
+                    "failed game selection preserves configured path and does not create a fallback library");
                 Assert(Storage.DefaultForGame(fixtureGame) == gameStorage &&
                     !gameStorage.StartsWith(fixtureGame + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
                     "default library is beside game folder, never inside Battle.net update tree");

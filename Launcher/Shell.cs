@@ -2415,18 +2415,13 @@ namespace CampaignHangar
         async Task SelectGamePath(string selectedGame)
         {
             if (busy || distributionView.DownloadInProgress) return;
+            string destination = null, selectedDownloads = null;
             try
             {
-                string destination = Storage.DefaultForGame(selectedGame);
-                string selectedDownloads = Storage.DefaultDownloadsForGame(selectedGame);
-                bool fallback = !String.Equals(destination,
-                    Path.Combine(Directory.GetParent(Path.GetFullPath(selectedGame).TrimEnd('\\')).FullName,
-                        AppChannel.StorageFolder), StringComparison.OrdinalIgnoreCase) ||
-                    !String.Equals(selectedDownloads, Path.Combine(selectedGame, AppChannel.DownloadsFolder),
-                        StringComparison.OrdinalIgnoreCase);
+                destination = Storage.DefaultForGame(selectedGame);
+                selectedDownloads = Storage.DefaultDownloadsForGame(selectedGame);
                 if (!AppDialog.Confirm(this, "게임 폴더: " + selectedGame + "\n보관소: " + destination +
                     "\n다운로드: " + selectedDownloads +
-                    (fallback ? "\n게임 설치 폴더의 쓰기 권한이 제한되어 사용자 폴더를 사용합니다." : "") +
                     "\n\n캠페인 파일을 저장하는 폴더입니다." +
                     "\n캠페인 교체 시 기존 파일을 이곳에 백업합니다." +
                     "\n" + Storage.RelocationDescription(root, destination),
@@ -2444,6 +2439,13 @@ namespace CampaignHangar
                     (result.warning == null ? "" : "\n" + result.warning) +
                     "\n기존 ZIP 파일은 원래 위치에 그대로 두었습니다.\n설정을 반영하기 위해 앱 화면을 다시 엽니다.", "설정 완료");
                 ReloadRequested = true; Close();
+            }
+            catch (UnauthorizedAccessException error)
+            {
+                string message = Storage.AccessDeniedGuidance(destination ?? "(설정 전)",
+                    selectedDownloads ?? "(설정 전)") + "\n\n상세: " + error.Message;
+                status.Text = "게임 경로 설정 미완료 · 폴더 접근 거부";
+                AppDialog.Info(this, message, "폴더 접근 권한이 없습니다");
             }
             catch (Exception error) { Error(error); }
             finally { if (!IsDisposed) SetBusy(false); }
