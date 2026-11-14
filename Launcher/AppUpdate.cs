@@ -8,11 +8,11 @@ using System.Security.Cryptography;
 using System.Web.Script.Serialization;
 
 #if UPDATE_FIXTURE
-[assembly: System.Reflection.AssemblyVersion("0.2.2.0")]
-[assembly: System.Reflection.AssemblyFileVersion("0.2.2.0")]
+[assembly: System.Reflection.AssemblyVersion("0.2.4.0")]
+[assembly: System.Reflection.AssemblyFileVersion("0.2.4.0")]
 #else
-[assembly: System.Reflection.AssemblyVersion("0.2.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("0.2.1.0")]
+[assembly: System.Reflection.AssemblyVersion("0.2.3.0")]
+[assembly: System.Reflection.AssemblyFileVersion("0.2.3.0")]
 #endif
 #if DEVELOPMENT
 [assembly: System.Reflection.AssemblyProduct("CampaignHangar.development")]

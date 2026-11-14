@@ -158,6 +158,9 @@ namespace CampaignHangar
                 System.Diagnostics.Trace.WriteLine("UI appearance preference could not be read: " + e.Message);
             }
             Value.theme = LiveTheme.Resolve(Value.theme).Id;
+            // Legacy "progress box only" settings must never suppress the
+            // startup or race-switch loading screen. Keep other saved options.
+            Value.browseWhileWorking = false;
         }
         internal void Save()
         {
@@ -550,7 +553,7 @@ namespace CampaignHangar
         void StartLiveIntro(bool forced)
         {
             if (!AppChannel.HasThemedUi || IsDisposed || !IsHandleCreated) return;
-            if (!forced && (isolated || uiLook == null || uiLook.Value.browseWhileWorking)) return;
+            if (!forced && (isolated || uiLook == null)) return;
             if (bootOverlay != null && !bootOverlay.IsDisposed) bootOverlay.Finish();
             UiCinematicBoot current = null;
             current = new UiCinematicBoot(delegate

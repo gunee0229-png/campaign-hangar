@@ -312,7 +312,7 @@ namespace CampaignHangar
                     total = progress == null ? 0L : progress.total,
                     bytes = progress != null && progress.bytes,
                     fullscreen = CanShowHubWorkScreen(),
-                    browse = uiLook != null && uiLook.Value.browseWhileWorking,
+                    browse = false,
                     cancelable = (hubWorkCancellation != null && !hubWorkCancellation.IsCancellationRequested) ||
                         hubExternalCancel != null
                 };
@@ -582,12 +582,14 @@ namespace CampaignHangar
                    document.getElementById('bootPercent').textContent!=='측정 중')return 'indeterminate';
                 u.setWorkProgress({sequence:10003,active:false});
                 if(!document.getElementById('boot').classList.contains('is-hidden'))return 'finish';
+                if(document.getElementById('workBrowseToggle'))return 'retired-setting-visible';
                 u.applyLivePreferences({browseWhileWorking:true});
                 u.setWorkProgress({sequence:10004,active:true,fullscreen:false});
                 if(!document.getElementById('boot').classList.contains('is-hidden'))return 'compact';
                 u.setWorkProgress({sequence:10005,active:false});
                 u.setWorkProgress({sequence:10005.1,active:true,fullscreen:true});
-                if(!document.getElementById('boot').classList.contains('is-compact-work'))return 'browse-default';
+                if(document.getElementById('boot').classList.contains('is-compact-work')||
+                   !document.body.classList.contains('is-booting'))return 'legacy-setting-suppresses-fullscreen';
                 u.setWorkProgress({sequence:10005.2,active:false});
                 u.applyLivePreferences({browseWhileWorking:false});
                 u.setActivationState({activeId:'qa-other',previousId:'qa-installed',
@@ -604,7 +606,7 @@ namespace CampaignHangar
             var workResult=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(workProgressContract));
             if (!(workResult is string) || (string)workResult!="ok")
                 throw new InvalidOperationException("Unified real-work overlay/reveal contract failed: "+workResult);
-            Console.WriteLine("WEBVIEW WORK & REVEAL PASS: measured/unknown progress, fullscreen/compact isolation, active history priority and category selection.");
+            Console.WriteLine("WEBVIEW WORK & REVEAL PASS: measured/unknown progress, retired setting ignored, fullscreen default, temporary browse, active history priority and category selection.");
             // Confirm that the *native* WorkProgress reporter, rather than
             // a browser-only fabricated progress value, reaches the UI.
             hubProgressSequence = 10006;
@@ -1118,7 +1120,7 @@ namespace CampaignHangar
             var immediateBoot = Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
                 var u=window.UiLab;
                 u.setThemeFromHost('terran');
-                u.applyLivePreferences({browseWhileWorking:false,reducedMotion:false});
+                u.applyLivePreferences({browseWhileWorking:true,reducedMotion:false});
                 document.getElementById('boot').classList.add('is-hidden');
                 document.querySelector('[data-set-theme=protoss]').click();
                 if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return 'reduced';
@@ -1137,7 +1139,7 @@ namespace CampaignHangar
                     throw new InvalidOperationException("Theme did not switch after the loading overlay appeared.");
             }
             await hubWeb.ExecuteScriptAsync("window.UiLab.finishBoot();window.UiLab.setThemeFromHost('terran')");
-            Console.WriteLine("WEBVIEW THEME LOADING PASS: first frame shows loading before the themed page changes.");
+            Console.WriteLine("WEBVIEW THEME LOADING PASS: legacy work-box preference cannot hide the loading frame before a theme change.");
             var bootSequence=30000;
             foreach(var palette in LiveTheme.Choices)
             {
@@ -2378,7 +2380,8 @@ namespace CampaignHangar
                 };
                 hubWeb.Visible = true;
                 hubWeb.BringToFront();
-                bool intro = uiLook != null && !uiLook.Value.browseWhileWorking && !isolated;
+                // Startup/theme animations are unrelated to background-work UI.
+                bool intro = !isolated;
                 hubWeb.Source = new Uri("https://hangar-live.test/index.html?live=1&embed=1&theme=" +
                     LiveTheme.Current.Id + "&intro=" + (intro ? "1" : "0") + "&channel=" + AppChannel.Id);
             }
@@ -2625,7 +2628,6 @@ namespace CampaignHangar
             {
                 string json = Data.Json.Serialize(new {
                     theme = LiveTheme.Current.Id,
-                    browseWhileWorking = uiLook.Value.browseWhileWorking,
                     reducedMotion = uiLook.Value.reducedMotion,
                     highContrast = uiLook.Value.highContrast
                 });
@@ -3047,9 +3049,7 @@ namespace CampaignHangar
             {
                 if (uiLook == null) return;
                 var setting = command.Substring("settings:".Length);
-                if (setting == "work-browse:1") uiLook.Value.browseWhileWorking = true;
-                else if (setting == "work-browse:0") uiLook.Value.browseWhileWorking = false;
-                else if (setting == "motion:1") uiLook.Value.reducedMotion = true;
+                if (setting == "motion:1") uiLook.Value.reducedMotion = true;
                 else if (setting == "motion:0") uiLook.Value.reducedMotion = false;
                 else if (setting == "contrast:1") uiLook.Value.highContrast = true;
                 else if (setting == "contrast:0") uiLook.Value.highContrast = false;

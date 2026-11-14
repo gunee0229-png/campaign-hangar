@@ -202,10 +202,19 @@ namespace CampaignHangar
                 VerifyCcmPayload(Path.Combine(root,"ccm-payload"));
                 string lookPath=Path.Combine(root,"work-browse-preference.json");
                 var look=new UiLookStore(lookPath);
+                Assert(!look.Value.browseWhileWorking,
+                    "fresh install defaults to fullscreen work and theme loading");
+                // A profile from 0.2.1 may contain the retired compact-work
+                // preference. Ignore that bit without resetting other options.
+                look.Value.theme="zerg";
+                look.Value.highContrast=true;
+                look.Value.reducedMotion=true;
                 look.Value.browseWhileWorking=true;look.Save();
                 var restoredLook=new UiLookStore(lookPath);
-                Assert(restoredLook.Value.browseWhileWorking,
-                    "unified progress-box preference persists across restart");
+                Assert(!restoredLook.Value.browseWhileWorking &&
+                    restoredLook.Value.theme=="zerg" && restoredLook.Value.highContrast &&
+                    restoredLook.Value.reducedMotion,
+                    "retired progress option is disabled while other saved UI settings survive");
                 var publicTitles = new[] {
                     new Campaign { id = "antioch-chronicles", name = "안티오크 연대기", kind = "dedicated" },
                     new Campaign { id = "sc-evo", name = "매스리콜 · SC Evo 적용판", kind = "dedicated" },
@@ -644,6 +653,20 @@ namespace CampaignHangar
                     "site base metadata maps exactly to four campaigns and other");
                 Assert(Catalogue.DetailUrl(categorized[0]) == Data.Site + "/campaigns.html?campaign=a%20%26%20b#gallery", "site detail link uses encoded campaign ID and real category");
                 Assert(Catalogue.ThumbnailUrl(categorized[0]) == Data.Site + "/assets/test.webp", "thumbnail resolves against site origin");
+                categorized[0].thumbnail = "https://media.forgecdn.net/avatars/193/524/636868521699918824.jpeg";
+                Assert(Catalogue.ThumbnailUrl(categorized[0]) == categorized[0].thumbnail,
+                    "site-listed ForgeCDN creator thumbnails are retained by hangar");
+                categorized[0].thumbnail = "https://media.forgecdn.net/attachments/160/287/Logo.jpg";
+                Assert(Catalogue.ThumbnailUrl(categorized[0]) == categorized[0].thumbnail,
+                    "ForgeCDN attachment thumbnails are retained without manual artwork");
+                categorized[0].thumbnail = "http://media.forgecdn.net/avatars/193/524/636868521699918824.jpeg";
+                Assert(Catalogue.ThumbnailUrl(categorized[0]) == null, "unsecured ForgeCDN thumbnail rejected");
+                categorized[0].thumbnail = "https://media.forgecdn.net.evil.example/a.jpg";
+                Assert(Catalogue.ThumbnailUrl(categorized[0]) == null, "lookalike ForgeCDN host rejected");
+                categorized[0].thumbnail = "https://media.forgecdn.net:444/a.jpg";
+                Assert(Catalogue.ThumbnailUrl(categorized[0]) == null, "non-default ForgeCDN port rejected");
+                categorized[0].thumbnail = "https://media.forgecdn.net/a.exe";
+                Assert(Catalogue.ThumbnailUrl(categorized[0]) == null, "ForgeCDN non-image path rejected");
                 categorized[0].thumbnail = "https://other.example/test.webp";
                 Assert(Catalogue.ThumbnailUrl(categorized[0]) == null, "external thumbnail origin rejected");
                 Assert(Catalogue.SameVersion("v2.1 · 정식 출시", "2.1.0") &&

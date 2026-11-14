@@ -65,7 +65,16 @@ namespace CampaignHangar
             if (String.IsNullOrWhiteSpace(path)) return null;
             Uri uri;
             if (!Uri.TryCreate(new Uri(Data.Site + "/"), path, out uri) || uri.Scheme != "https" ||
-                uri.Host != new Uri(Data.Site).Host || !uri.IsDefaultPort || !String.IsNullOrEmpty(uri.UserInfo)) return null;
+                !uri.IsDefaultPort || !String.IsNullOrEmpty(uri.UserInfo)) return null;
+            // The archive keeps author-provided campaign thumbnails on ForgeCDN.
+            // Trust only its exact media hostname, never arbitrary site supplied
+            // URLs or similar-looking subdomains; other images remain site-local.
+            bool archive = uri.Host.Equals(new Uri(Data.Site).Host, StringComparison.OrdinalIgnoreCase);
+            bool forge = uri.Host.Equals("media.forgecdn.net", StringComparison.OrdinalIgnoreCase) &&
+                String.IsNullOrEmpty(uri.Query) && String.IsNullOrEmpty(uri.Fragment) &&
+                new[] { ".png", ".jpg", ".jpeg", ".webp", ".gif" }
+                    .Contains(Path.GetExtension(uri.AbsolutePath), StringComparer.OrdinalIgnoreCase);
+            if (!archive && !forge) return null;
             return uri.AbsoluteUri;
         }
         static string VersionLabel(string value)

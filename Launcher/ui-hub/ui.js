@@ -73,7 +73,9 @@
   var liveDataReceived = false, registeredCount = 12, installedOnly = false;
   var themeSwitchSerial=0,viewHistory=[];
   var hostWorkActive=false,hostWorkDisplayed=false,hostWorkSequence=-1,hostWorkId=0;
-  var workBrowseDefault=false,workBrowsing=false;
+  // Every new operation begins fullscreen. The optional in-progress
+  // "둘러보기" button is temporary and never changes the next operation.
+  var workBrowsing=false;
   var workInitialRect=null;
   function syncDetachedWorkWindow(){
     if(!liveMode||!hostWorkActive||!workBrowsing||!workInitialRect)return;
@@ -155,7 +157,7 @@
     }
     if(!hostWorkDisplayed){
       hostWorkDisplayed=true;
-      workBrowsing=!!data.browse||workBrowseDefault;
+      workBrowsing=!!data.browse;
       if(bootFrame!==null){cancelAnimationFrame(bootFrame);bootFrame=null;}
       if(window.HangarFeatures)window.HangarFeatures.suspendArchive();
       document.body.classList.add("is-booting");
@@ -426,14 +428,14 @@
       el("workspace").scrollTop = 0;
       el("campaignList").parentElement.scrollTop = 0;
     }
-    if (!workBrowseDefault&&!bootPrepared&&(animate || (liveMode && changing && !fromHost)))
+    if (!bootPrepared&&(animate || (liveMode && changing && !fromHost)))
       replayBoot(liveMode?1000:undefined);
     sendHost("ready:" + t.concept);
     return true;
   }
   function switchThemeWithBoot(next){
     if(!THEMES[next]||state.theme===next)return false;
-    if(!liveMode||workBrowseDefault||state.reduceMotion||window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+    if(!liveMode||state.reduceMotion||window.matchMedia("(prefers-reduced-motion: reduce)").matches)
       return setTheme(next,false,true);
     // Reveal the opaque loading layer BEFORE changing the underlying layout.
     // Two paint frames separate the click from the theme reflow.
@@ -857,12 +859,8 @@
   }
   function applyLivePreferences(prefs) {
     if (!prefs || typeof prefs !== "object") return false;
-    if (typeof prefs.browseWhileWorking==="boolean") {
-      workBrowseDefault=prefs.browseWhileWorking;
-      if(hostWorkDisplayed)showWorkBrowse(workBrowseDefault);
-    }
-    setOptionLabel("workBrowseToggle",workBrowseDefault?"작업 진행: 진행 박스만":"작업 진행: 전체 화면");
-    el("workBrowseToggle").setAttribute("aria-pressed",String(workBrowseDefault));
+    // Historical browseWhileWorking flags are intentionally ignored: they
+    // previously hid the theme-change loader as well as the work overlay.
     if (typeof prefs.reducedMotion==="boolean") state.reduceMotion=prefs.reducedMotion;
     if (typeof prefs.highContrast==="boolean") state.contrast=prefs.highContrast;
     document.body.classList.toggle("reduce-motion",state.reduceMotion);
@@ -1066,11 +1064,6 @@
       if(liveMode) sendHost("settings:motion:"+(state.reduceMotion?"1":"0"));
     });
     el("bootBrowse").addEventListener("click",function(){if(hostWorkDisplayed)showWorkBrowse(!workBrowsing);});
-    el("workBrowseToggle").addEventListener("click",function(){
-      workBrowseDefault=!workBrowseDefault;
-      applyLivePreferences({browseWhileWorking:workBrowseDefault});
-      if(liveMode)sendHost("settings:work-browse:"+(workBrowseDefault?"1":"0"));
-    });
     el("skipBoot").addEventListener("click",finishBoot);
     el("replayBoot").addEventListener("click",function(){if(!liveMode)replayBoot();});
     el("minimizeApp").addEventListener("click",function () { sendHost("minimize"); });
