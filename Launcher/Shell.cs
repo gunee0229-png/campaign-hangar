@@ -406,7 +406,7 @@ namespace CampaignHangar
             bankStatus.TextChanged += delegate { bankStatus.Visible = !String.IsNullOrWhiteSpace(bankStatus.Text); };
             if (AppChannel.HasThemedUi && uiLook != null)
             {
-                var looks = Group("게임 UI 디자인", "테란, 프로토스, 저그, 노바 테마를 전환하고 시작 연출을 다시 볼 수 있습니다.");
+                var looks = Group("게임 UI 디자인", "테마와 작업 진행 표시 방식을 설정합니다.");
                 var lookButtons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill,
                     BackColor = Color.Transparent, WrapContents = true, Margin = new Padding(0, 10, 0, 0) };
                 foreach (var palette in LiveTheme.Modes)
@@ -419,6 +419,17 @@ namespace CampaignHangar
                     button.AutoSize = true;
                     lookButtons.Controls.Add(button);
                 }
+                var workBrowseCheck = new CheckBox { AutoSize = true, Checked = uiLook.Value.browseWhileWorking,
+                    Text = "작업 진행 박스만 표시 (해제: 전체 화면)", ForeColor = GlassTheme.Text,
+                    BackColor = Color.Transparent, Margin = new Padding(15, 12, 0, 0),
+                    Font = new Font("맑은 고딕", 10, FontStyle.Bold) };
+                workBrowseCheck.CheckedChanged += async delegate {
+                    uiLook.Value.browseWhileWorking = workBrowseCheck.Checked;
+                    uiLook.Save();
+                    await PushLiveHubPreferences();
+                    UpdateHubWorkState();
+                };
+                lookButtons.Controls.Add(workBrowseCheck);
                 var replay = SettingButton("시작 연출 다시 보기", delegate { StartLiveIntro(true); });
                 replay.Margin = new Padding(0, 0, 10, 7);
                 lookButtons.Controls.Add(replay);

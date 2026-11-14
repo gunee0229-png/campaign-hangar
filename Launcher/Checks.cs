@@ -204,17 +204,17 @@ namespace CampaignHangar
                 var look=new UiLookStore(lookPath);
                 Assert(!look.Value.browseWhileWorking,
                     "fresh install defaults to fullscreen work and theme loading");
-                // A profile from 0.2.1 may contain the retired compact-work
-                // preference. Ignore that bit without resetting other options.
+                // Keep the user's selected work-only presentation independent
+                // of startup and race-switch loading screens.
                 look.Value.theme="zerg";
                 look.Value.highContrast=true;
                 look.Value.reducedMotion=true;
                 look.Value.browseWhileWorking=true;look.Save();
                 var restoredLook=new UiLookStore(lookPath);
-                Assert(!restoredLook.Value.browseWhileWorking &&
+                Assert(restoredLook.Value.browseWhileWorking &&
                     restoredLook.Value.theme=="zerg" && restoredLook.Value.highContrast &&
                     restoredLook.Value.reducedMotion,
-                    "retired progress option is disabled while other saved UI settings survive");
+                    "saved work presentation and other UI preferences survive restart");
                 var publicTitles = new[] {
                     new Campaign { id = "antioch-chronicles", name = "안티오크 연대기", kind = "dedicated" },
                     new Campaign { id = "sc-evo", name = "매스리콜 · SC Evo 적용판", kind = "dedicated" },

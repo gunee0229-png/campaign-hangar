@@ -312,7 +312,7 @@ namespace CampaignHangar
                     total = progress == null ? 0L : progress.total,
                     bytes = progress != null && progress.bytes,
                     fullscreen = CanShowHubWorkScreen(),
-                    browse = false,
+                    browse = uiLook != null && uiLook.Value.browseWhileWorking,
                     cancelable = (hubWorkCancellation != null && !hubWorkCancellation.IsCancellationRequested) ||
                         hubExternalCancel != null
                 };
@@ -582,16 +582,25 @@ namespace CampaignHangar
                    document.getElementById('bootPercent').textContent!=='측정 중')return 'indeterminate';
                 u.setWorkProgress({sequence:10003,active:false});
                 if(!document.getElementById('boot').classList.contains('is-hidden'))return 'finish';
-                if(document.getElementById('workBrowseToggle'))return 'retired-setting-visible';
-                u.applyLivePreferences({browseWhileWorking:true});
+                var displayToggle=document.getElementById('workBrowseToggle');
+                if(!displayToggle || !displayToggle.textContent.includes('전체 화면'))return 'work-setting-missing';
+                displayToggle.click();
+                if(!displayToggle.textContent.includes('진행 박스만')||
+                    displayToggle.getAttribute('aria-pressed')!=='true')return 'work-setting-label';
                 u.setWorkProgress({sequence:10004,active:true,fullscreen:false});
                 if(!document.getElementById('boot').classList.contains('is-hidden'))return 'compact';
                 u.setWorkProgress({sequence:10005,active:false});
                 u.setWorkProgress({sequence:10005.1,active:true,fullscreen:true});
-                if(document.getElementById('boot').classList.contains('is-compact-work')||
-                   !document.body.classList.contains('is-booting'))return 'legacy-setting-suppresses-fullscreen';
+                if(!document.getElementById('boot').classList.contains('is-compact-work')||
+                   document.body.classList.contains('is-booting'))return 'saved-window-mode';
                 u.setWorkProgress({sequence:10005.2,active:false});
-                u.applyLivePreferences({browseWhileWorking:false});
+                displayToggle.click();
+                if(!displayToggle.textContent.includes('전체 화면')||
+                    displayToggle.getAttribute('aria-pressed')!=='false')return 'fullscreen-default-label';
+                u.setWorkProgress({sequence:10005.3,active:true,fullscreen:true});
+                if(document.getElementById('boot').classList.contains('is-compact-work')||
+                   !document.body.classList.contains('is-booting'))return 'fullscreen-default';
+                u.setWorkProgress({sequence:10005.4,active:false});
                 u.setActivationState({activeId:'qa-other',previousId:'qa-installed',
                     activeName:'First',previousName:'Second'});
                 u.setView('all');
@@ -606,7 +615,7 @@ namespace CampaignHangar
             var workResult=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(workProgressContract));
             if (!(workResult is string) || (string)workResult!="ok")
                 throw new InvalidOperationException("Unified real-work overlay/reveal contract failed: "+workResult);
-            Console.WriteLine("WEBVIEW WORK & REVEAL PASS: measured/unknown progress, retired setting ignored, fullscreen default, temporary browse, active history priority and category selection.");
+            Console.WriteLine("WEBVIEW WORK & REVEAL PASS: measured/unknown progress, restored work display setting, separate-window persistence, fullscreen default, independent race loading, active history and category selection.");
             // Confirm that the *native* WorkProgress reporter, rather than
             // a browser-only fabricated progress value, reaches the UI.
             hubProgressSequence = 10006;
@@ -2628,6 +2637,7 @@ namespace CampaignHangar
             {
                 string json = Data.Json.Serialize(new {
                     theme = LiveTheme.Current.Id,
+                    browseWhileWorking = uiLook.Value.browseWhileWorking,
                     reducedMotion = uiLook.Value.reducedMotion,
                     highContrast = uiLook.Value.highContrast
                 });
@@ -3049,7 +3059,9 @@ namespace CampaignHangar
             {
                 if (uiLook == null) return;
                 var setting = command.Substring("settings:".Length);
-                if (setting == "motion:1") uiLook.Value.reducedMotion = true;
+                if (setting == "work-browse:1") uiLook.Value.browseWhileWorking = true;
+                else if (setting == "work-browse:0") uiLook.Value.browseWhileWorking = false;
+                else if (setting == "motion:1") uiLook.Value.reducedMotion = true;
                 else if (setting == "motion:0") uiLook.Value.reducedMotion = false;
                 else if (setting == "contrast:1") uiLook.Value.highContrast = true;
                 else if (setting == "contrast:0") uiLook.Value.highContrast = false;

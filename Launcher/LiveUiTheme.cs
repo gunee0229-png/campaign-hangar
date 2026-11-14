@@ -158,9 +158,8 @@ namespace CampaignHangar
                 System.Diagnostics.Trace.WriteLine("UI appearance preference could not be read: " + e.Message);
             }
             Value.theme = LiveTheme.Resolve(Value.theme).Id;
-            // Legacy "progress box only" settings must never suppress the
-            // startup or race-switch loading screen. Keep other saved options.
-            Value.browseWhileWorking = false;
+            // Work progress presentation is persisted separately from the
+            // startup and race-switch loading animation.
         }
         internal void Save()
         {
