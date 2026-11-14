@@ -36,6 +36,11 @@ body[data-layout-preset="focus"] #focusDetails>div:has(#focusInstalled) {display
 body[data-layout-free="false"] .contact-cell {max-width:100%;box-sizing:border-box;}
 body[data-layout-preset="base"] #detailArt {height:auto;min-height:116px;flex:1 0 116px;
   background-size:contain!important;background-position:center!important;background-repeat:no-repeat!important;}
+/* On compact embedded archive windows the themed header is intentionally
+   hidden by UiLab. Do not let the narrow-layout display:flex!important rule
+   resurrect its title, preview hint and statistics above the real website. */
+body.embedded .workspace[data-view="archive"] > .workspace-header{
+  display:none!important;}
 .editor-window-page .layout-editor-header {background:var(--bg)!important;
   border-bottom:0;padding:10px 0 14px;}
 .editor-window-page .layout-editor-header strong {color:var(--text);}
@@ -78,3 +83,303 @@ body[data-menu-shape="protoss"] .nav-link.is-active {border-color:transparent!im
 body[data-menu-shape="protoss"] .nav-link:hover::before {background:var(--borderColor);}
 body[data-menu-shape="protoss"] .nav-link.is-active::after {
   background:linear-gradient(90deg,color-mix(in srgb,var(--selectedColor) 18%,var(--menu)),var(--menuEnd));}
+.search-with-hidden{display:flex;align-items:center;gap:7px;flex:1 1 240px;
+  min-width:210px;max-width:355px}
+.search-with-hidden .search-field{flex:1 1 auto;min-width:0;width:auto}
+.catalog-hidden-toggle{position:relative;display:grid;place-items:center;flex:none;width:38px;height:37px;
+  border:1px solid var(--edge);border-radius:6px;color:var(--dim);background:rgba(0,0,0,.24);cursor:pointer}
+.catalog-hidden-toggle svg{width:20px;height:20px;display:block}
+.catalog-hidden-toggle:hover,.catalog-hidden-toggle:focus-visible,.catalog-hidden-toggle.is-active{
+  color:var(--accent);border-color:var(--accent);background:rgba(var(--accent-rgb),.14);outline:none}
+.catalog-hidden-count{position:absolute;top:-6px;right:-6px;padding:1px 5px;border-radius:8px;
+  background:var(--accent);color:var(--bg);font-size:9px;font-weight:800}
+.campaign-card.is-hidden-campaign{opacity:.69;border-style:dashed}
+.card-hidden-label{display:inline-block;padding:1px 5px;border:1px solid var(--accent);
+  border-radius:3px;color:var(--accent);font-size:10px;vertical-align:middle}
+.layout-library{margin:18px 0 8px;padding:14px;border:1px solid var(--edge);
+  border-radius:9px;background:rgba(0,0,0,.13)}
+.layout-library-heading{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-bottom:13px}
+.layout-library-heading strong{color:var(--text);font-size:15px}
+.layout-library-heading small{color:var(--dim);font-size:11px}
+.layout-library-name{margin-bottom:9px}
+.layout-library-actions{display:flex;gap:8px;flex-wrap:wrap;margin:9px 0 14px}
+.layout-library-actions button{flex:1 1 115px;min-height:38px!important;font-size:12px}
+.layout-library-list{display:grid;gap:8px;max-height:360px;overflow:auto;padding-right:3px}
+.layout-library-item{display:flex;flex-wrap:wrap;justify-content:space-between;
+  align-items:center;gap:9px;padding:10px;border:1px solid var(--edge-faint);
+  border-radius:7px;background:rgba(0,0,0,.14);min-width:0}
+.layout-library-item>div:first-child{display:grid;gap:4px;min-width:100px;flex:1 1 135px}
+.layout-library-item strong{display:block;max-width:100%;overflow-wrap:anywhere;font-size:12px}
+.layout-library-item small{font-size:10px;color:var(--dim)}
+.layout-library-item-actions{display:flex;flex-wrap:wrap;gap:5px}
+.layout-library-item-actions button{min-height:33px!important;padding:5px 9px!important;font-size:11px}
+.layout-library-empty{margin:0;padding:13px 7px;color:var(--dim);font-size:11px}
+.layout-library-pages{display:flex;justify-content:center;align-items:center;gap:12px;padding:7px}
+.layout-library-pages span{font-size:11px;color:var(--dim);min-width:44px;text-align:center}
+.layout-library-pages button{min-height:32px!important}
+/* The action rail responds to its own allocated width, not just screen width.
+   Keep every existing SVG icon, full accessible name, and all seven actions. */
+.action-strip .action-label-full{display:inline}
+.action-strip .action-label-compact{display:none}
+.action-strip[data-compact-actions="true"] .action-label-full{display:none!important}
+.action-strip[data-compact-actions="true"] .action-label-compact{display:inline!important}
+.action-strip[data-compact-actions="true"]{flex-wrap:wrap!important;gap:4px!important}
+.action-strip[data-compact-actions="true"]>.action-button,
+body.embedded .action-strip[data-compact-actions="true"]>.action-button{
+  display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  flex:1 1 74px!important;min-width:72px!important;
+  padding:0 7px!important;font-size:11px!important;white-space:nowrap;line-height:1.2}
+.action-strip[data-compact-actions="true"]>.action-button .action-icon{
+  display:inline-flex!important;align-items:center;justify-content:center;
+  flex:0 0 17px;width:17px;height:17px;margin:0!important}
+.action-strip[data-compact-actions="true"]>.action-button .action-icon svg{
+  width:17px;height:17px;display:block}
+.action-strip[data-compact-actions="true"]>.action-button small{display:none!important}
+
+/* A wider editor changes the arrangement of settings rather than merely
+   stretching each input. The same data controls are retained in every mode. */
+.editor-window-page .layout-editor-dashboard{
+  display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:start;
+  grid-template-areas:"geometry" "colors" "saved" "extras";
+  container-type:inline-size}
+.editor-window-page .layout-editor-section{
+  min-width:0;padding:14px;border:1px solid var(--edge);border-radius:8px;
+  background:rgba(var(--accent-rgb),.035)}
+.editor-window-page .layout-editor-section>h3{
+  margin:0 0 12px;color:var(--accent-bright);font-size:13px;line-height:1.4}
+.editor-window-page .layout-editor-section--geometry{grid-area:geometry}
+.editor-window-page .layout-editor-section--colors{grid-area:colors}
+.editor-window-page .layout-editor-section--extras{grid-area:extras}
+.editor-window-page .layout-editor-section--saved{grid-area:saved}
+.editor-window-page .layout-editor-section .layout-editor-row{
+  grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+.editor-window-page .layout-editor-section .layout-editor-row>*{min-width:0}
+.editor-window-page .layout-editor-section .layout-range{margin-top:0!important}
+.editor-window-page .layout-editor-section--colors .layout-color-panel{
+  border:0;margin:0;padding:0;min-width:0}
+.editor-window-page .layout-editor-section--colors .layout-color-panel fieldset{
+  min-width:0;max-width:100%;box-sizing:border-box}
+.editor-window-page .layout-editor-section--colors .layout-color-grid{
+  grid-template-columns:repeat(2,minmax(0,1fr))}
+.editor-window-page .layout-editor-section--saved .layout-library{
+  margin:0;padding:0;border:0;background:none}
+.editor-window-page .layout-editor-section--saved .layout-library-list{
+  grid-template-columns:minmax(0,1fr)}
+.editor-window-page .layout-editor-section--saved .layout-library-item{
+  min-width:0;overflow-wrap:anywhere}
+.editor-window-page .layout-editor-section--extras .layout-quick-actions{
+  margin-top:0}
+.editor-window-page .layout-editor-section--extras .layout-free-options{
+  min-width:0}
+@media (max-width:430px){
+  .editor-window-page .layout-editor-section{padding:10px}
+  .editor-window-page .layout-editor-section .layout-editor-row{grid-template-columns:minmax(0,1fr)}
+}
+.action-strip #reviewButton,.action-strip #recommendButton{white-space:nowrap}
+body.embedded .action-strip{flex-wrap:wrap;row-gap:6px}
+body.embedded .action-strip>.action-button{flex:1 1 110px}
+body.embedded .action-strip #reviewButton,body.embedded .action-strip #recommendButton{
+  min-width:92px!important}
+@media(max-width:900px){
+  .action-strip #reviewButton,.action-strip #recommendButton{min-width:100px}
+}
+
+/* Short-lived recommendation signal: uses the current faction's boot palette
+   without interrupting the work overlay or the campaign browsing context. */
+.recommendation-notice[hidden]{display:none!important}
+.recommendation-notice{position:fixed;inset:0;z-index:120;display:grid;place-items:center;
+  padding:18px;pointer-events:none;background:rgba(1,8,17,.24);opacity:1;visibility:visible;
+  backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
+  transition:opacity .34s ease-in-out,visibility .34s ease-in-out}
+.recommendation-notice.is-fading{opacity:0;visibility:hidden}
+.recommendation-notice-card{position:relative;display:flex;flex-direction:column;align-items:center;
+  width:min(480px,calc(100vw - 36px));min-height:262px;padding:21px 27px 27px;
+  text-align:center;overflow:hidden;border:1px solid rgba(var(--accent-rgb),.64);
+  background:linear-gradient(158deg,rgba(9,24,42,.98),rgba(5,13,25,.98));
+  box-shadow:0 18px 55px rgba(0,0,0,.6),inset 0 0 28px rgba(var(--accent-rgb),.09),
+    0 0 35px rgba(var(--accent-rgb),.18)}
+.recommendation-notice-card::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(112deg,transparent 39%,rgba(var(--accent-rgb),.13) 49%,transparent 60%);
+  animation:recommendSignalSweep 1.5s ease-in-out both;pointer-events:none}
+.recommendation-orbit{position:relative;display:grid;place-items:center;width:100px;height:100px;
+  flex:0 0 100px;color:var(--accent-bright);filter:drop-shadow(0 0 12px rgba(var(--accent-rgb),.42))}
+.recommendation-orbit-outer,.recommendation-orbit-inner{position:absolute;inset:7px;
+  border:2px dashed rgba(var(--accent-rgb),.58);border-radius:50%;animation:spin 3.2s linear infinite}
+.recommendation-orbit-inner{inset:19px;border:2px solid rgba(var(--secondary-rgb),.72);
+  border-top-color:transparent;border-bottom-color:transparent;animation-direction:reverse;
+  animation-duration:1.8s}
+.recommendation-orbit-glyph{position:relative;z-index:1;font-size:41px;text-shadow:0 0 21px var(--accent)}
+.recommendation-notice-eyebrow{margin:10px 0 8px;font:700 10px/1.4 Consolas,monospace;
+  letter-spacing:.18em;color:var(--secondary);text-transform:uppercase}
+.recommendation-notice-headline{color:var(--accent-bright);font-size:23px;line-height:1.35}
+.recommendation-notice-description{margin:8px 0 4px;max-width:100%;font-size:13px;
+  line-height:1.65;color:var(--text);overflow-wrap:anywhere}
+.recommendation-notice-line{position:absolute;left:18%;bottom:0;width:64%;height:3px;
+  background:linear-gradient(90deg,transparent,var(--accent),var(--secondary),transparent);
+  box-shadow:0 0 13px rgba(var(--accent-rgb),.65)}
+
+/* Successful recommendations celebrate in place: no modal, dimming or text box.
+   Particles live at body level so themed action-button clipping cannot cut them off. */
+.recommendation-burst[hidden]{display:none!important}
+.recommendation-burst{position:fixed;left:0;top:0;z-index:125;width:220px;height:220px;
+  transform:translate(-50%,-50%);pointer-events:none;overflow:visible;
+  color:var(--accent-bright)}
+.recommendation-burst-core{position:absolute;left:50%;top:50%;width:66px;height:66px;
+  background:linear-gradient(145deg,#fff8dd,var(--secondary),var(--accent-bright));
+  clip-path:polygon(50% 0,61% 34%,98% 35%,68% 57%,79% 92%,50% 72%,
+    21% 92%,32% 57%,2% 35%,39% 34%);
+  filter:drop-shadow(0 0 16px var(--accent));
+  animation:recommendStarPop 1.5s cubic-bezier(.2,.74,.32,1) both}
+.recommendation-burst-flash{position:absolute;left:50%;top:50%;
+  width:128px;height:128px;border:2px solid var(--secondary);
+  border-radius:50%;box-shadow:0 0 17px rgba(var(--accent-rgb),.4);
+  animation:recommendStarRing 1.5s ease-out both}
+.recommendation-burst-star{position:absolute;left:50%;top:50%;width:var(--size);
+  height:var(--size);background:var(--secondary);
+  clip-path:polygon(50% 0,61% 34%,98% 35%,68% 57%,79% 92%,50% 72%,
+    21% 92%,32% 57%,2% 35%,39% 34%);
+  filter:drop-shadow(0 0 7px var(--accent));
+  animation:recommendStarScatter 1.5s ease-out var(--delay) both}
+.recommendation-burst-star:nth-child(odd){background:var(--accent-bright)}
+.recommendation-burst-star:nth-child(4n){background:#fff3cb}
+.action-button.is-recommend-pending .action-icon{color:var(--secondary)!important;
+  animation:recommendCharge .85s ease-in-out infinite}
+@keyframes recommendStarPop{
+  0%{opacity:0;transform:translate(-50%,-50%) rotate(-42deg) scale(.08)}
+  17%{opacity:1;transform:translate(-50%,-50%) rotate(-8deg) scale(1.55)}
+  35%{opacity:1;transform:translate(-50%,-50%) rotate(7deg) scale(.94)}
+  60%{opacity:1;transform:translate(-50%,-50%) rotate(16deg) scale(1.08)}
+  100%{opacity:0;transform:translate(-50%,-50%) rotate(35deg) scale(.18)}
+}
+@keyframes recommendStarRing{
+  0%{opacity:0;transform:translate(-50%,-50%) scale(.05)}
+  16%{opacity:.92}
+  60%{opacity:.35}
+  100%{opacity:0;transform:translate(-50%,-50%) scale(1.9)}
+}
+@keyframes recommendStarScatter{
+  0%{opacity:0;transform:translate(-50%,-50%) rotate(var(--angle)) translateX(2px) scale(.1)}
+  19%{opacity:1}
+  54%{opacity:.94;transform:translate(-50%,-50%) rotate(var(--angle))
+      translateX(var(--distance)) scale(1)}
+  100%{opacity:0;transform:translate(-50%,-50%) rotate(var(--angle))
+      translateX(calc(var(--distance) + 19px)) scale(.1)}
+}
+@keyframes recommendCharge{0%,100%{opacity:.6;transform:scale(.95)}
+  50%{opacity:1;transform:scale(1.2)}}
+body[data-theme="terran"] .recommendation-burst-core{filter:drop-shadow(0 0 18px #e68b48)}
+body[data-theme="protoss"] .recommendation-burst-core{filter:drop-shadow(0 0 22px #80dbff)}
+body[data-theme="zerg"] .recommendation-burst-core{filter:drop-shadow(0 0 22px #d358dd)}
+body[data-theme="nova"] .recommendation-burst-core{filter:drop-shadow(0 0 15px #fa9c71)}
+.recommendation-notice[data-phase="success"] .recommendation-orbit-inner,
+.recommendation-notice[data-phase="duplicate"] .recommendation-orbit-inner,
+.recommendation-notice[data-phase="error"] .recommendation-orbit-inner{animation-play-state:paused}
+body[data-theme="terran"] .recommendation-notice-card{
+  clip-path:polygon(0 0,95% 0,100% 13%,100% 100%,5% 100%,0 87%)}
+body[data-theme="terran"] .recommendation-orbit-outer,
+body[data-theme="terran"] .recommendation-orbit-inner{border-radius:15%;transform:rotate(45deg)}
+body[data-theme="protoss"] .recommendation-notice-card{
+  border-color:rgba(var(--secondary-rgb),.85);
+  background:radial-gradient(ellipse at 50% 12%,rgba(var(--secondary-rgb),.17),transparent 55%),
+    linear-gradient(165deg,rgba(4,14,45,.98),rgba(2,7,26,.99))}
+body[data-theme="protoss"] .recommendation-orbit-glyph{font-size:54px;color:var(--secondary)}
+body[data-theme="zerg"] .recommendation-notice-card{border-radius:23px 6px 23px 6px;
+  background:radial-gradient(ellipse at 50% 16%,rgba(var(--accent-rgb),.18),transparent 57%),
+    linear-gradient(160deg,rgba(29,9,39,.98),rgba(10,5,19,.98))}
+body[data-theme="zerg"] .recommendation-orbit-outer,
+body[data-theme="zerg"] .recommendation-orbit-inner{border-radius:45% 55% 43% 57%;
+  animation:recommendHivePulse 1.5s ease-in-out infinite}
+body[data-theme="nova"] .recommendation-notice-card{border-left:3px solid var(--secondary);
+  background:linear-gradient(160deg,rgba(15,22,34,.99),rgba(4,7,13,.99))}
+body[data-theme="nova"] .recommendation-orbit-outer,
+body[data-theme="nova"] .recommendation-orbit-inner{border-radius:4px}
+@keyframes recommendSignalSweep{from{transform:translateX(-120%)}to{transform:translateX(120%)}}
+@keyframes recommendHivePulse{0%,100%{transform:scale(.91);opacity:.62}
+  50%{transform:scale(1.07);opacity:1}}
+@media(prefers-reduced-motion:reduce){
+  .recommendation-notice-card::after,.recommendation-orbit-outer,
+  .recommendation-orbit-inner{animation:none!important}
+  .recommendation-burst-core{animation:recommendReducedStar .4s ease-out both}
+  .recommendation-burst-flash,.recommendation-burst-star{display:none}
+  .action-button.is-recommend-pending .action-icon{animation:none}
+}
+body.reduce-motion .recommendation-burst-core{animation:recommendReducedStar .4s ease-out both}
+body.reduce-motion .recommendation-burst-flash,
+body.reduce-motion .recommendation-burst-star{display:none}
+body.reduce-motion .action-button.is-recommend-pending .action-icon{animation:none}
+@keyframes recommendReducedStar{
+  0%{opacity:.8;transform:translate(-50%,-50%) scale(.75)}
+  100%{opacity:0;transform:translate(-50%,-50%) scale(1)}
+}
+@media(min-width:810px){
+  .editor-window-page .layout-editor{padding:22px 26px!important}
+  .editor-window-page .layout-library-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .editor-window-page .layout-color-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media(max-width:530px){
+  .editor-window-page .layout-library-item-actions{width:100%}
+  .editor-window-page .layout-library-actions button{flex:1 1 100px}
+}
+
+/* CASE 20: reflow the controls WITHIN each group.
+   The dashboard itself stays full-width so four actual control columns fit. */
+.editor-window-page .layout-editor-choices,
+.editor-window-page .layout-editor-metrics{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  column-gap:12px;row-gap:12px;min-width:0}
+.editor-window-page .layout-editor-choices>label,
+.editor-window-page .layout-editor-metrics>label{min-width:0;margin:0!important}
+.editor-window-page .layout-editor-choices{margin-bottom:15px}
+.editor-window-page .layout-editor-subheading{
+  font-size:12px;font-weight:700;color:var(--secondary);margin:14px 0 10px;
+  padding-top:10px;border-top:1px solid var(--edge-faint)}
+.editor-window-page .layout-editor-metrics .layout-range b{
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.editor-window-page .layout-color-groups{
+  display:grid;grid-template-columns:minmax(0,1fr);gap:11px;align-items:start}
+.editor-window-page .layout-color-groups>fieldset{min-width:0;margin:0!important}
+.editor-window-page .layout-color-groups .layout-color-grid{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.editor-window-page .layout-color-groups .layout-color-grid label{min-width:0}
+.editor-window-page .layout-library-list{
+  display:grid;grid-template-columns:minmax(0,1fr);gap:9px;
+  max-height:none;overflow:visible}
+.editor-window-page .layout-library-item{min-width:0;padding:9px 11px}
+.editor-window-page .layout-library-item>div:first-child{flex-basis:100%}
+.editor-window-page .layout-library-item-actions{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%;gap:5px}
+.editor-window-page .layout-library-item-actions button{
+  min-width:0;min-height:31px!important;padding:5px 3px!important}
+.editor-window-page .layout-library-pages{margin-top:11px}
+@container (min-width:560px){
+  .editor-window-page .layout-editor-choices{
+    grid-template-columns:repeat(4,minmax(0,1fr))}
+  .editor-window-page .layout-color-groups{
+    grid-template-columns:minmax(0,.95fr) minmax(0,1.15fr);
+    grid-template-areas:"panel surfaces" "text surfaces" "icons status";gap:12px}
+  .editor-window-page .layout-color-group--panel{grid-area:panel}
+  .editor-window-page .layout-color-group--surfaces{grid-area:surfaces}
+  .editor-window-page .layout-color-group--text{grid-area:text}
+  .editor-window-page .layout-color-group--icons{grid-area:icons}
+  .editor-window-page .layout-color-group--status{grid-area:status}
+  .editor-window-page .layout-editor-section--saved .layout-library-list{
+    grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@container (min-width:850px){
+  .editor-window-page .layout-editor-metrics{
+    grid-template-columns:repeat(4,minmax(0,1fr))}
+  .editor-window-page .layout-color-group--surfaces .layout-color-grid{
+    grid-template-columns:repeat(3,minmax(0,1fr))}
+  .editor-window-page .layout-editor-section--saved .layout-library-list{
+    grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@container (min-width:1260px){
+  .editor-window-page .layout-editor-section--saved .layout-library-list{
+    grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+@container (max-width:440px){
+  .editor-window-page .layout-editor-choices{
+    grid-template-columns:repeat(2,minmax(0,1fr))}
+  .editor-window-page .layout-color-groups .layout-color-grid{
+    grid-template-columns:minmax(0,1fr)}
+}

@@ -72,6 +72,16 @@ namespace CampaignHangar
         }
         static string GamePath(string[] parts, string packageFolder)
         {
+            // Odyssey's two act bundles ship the same launcher twice.  The
+            // original launcher loads missions from Maps/Odyssey, not from
+            // the archive's Odyssey/Odyssey/Act ... wrapper directories.
+            if (parts.Length == 4 &&
+                String.Equals(parts[0], "Odyssey", StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(parts[1], "Odyssey", StringComparison.OrdinalIgnoreCase) &&
+                (String.Equals(parts[2], "Odyssey Campaign Act I + Launcher", StringComparison.OrdinalIgnoreCase) ||
+                 String.Equals(parts[2], "Odyssey Campaign Act II 01-13 + Launcher", StringComparison.OrdinalIgnoreCase)) &&
+                parts[3].EndsWith(".SC2Map", StringComparison.OrdinalIgnoreCase))
+                return "Maps/Odyssey/" + parts[3];
             // A directory-backed .SC2Mod contains all its original relative
             // members; a packed .SC2Mod is one file. Never flatten its contents.
             int mod = Array.FindIndex(parts, p => p.EndsWith(".SC2Mod", StringComparison.OrdinalIgnoreCase));
@@ -125,9 +135,34 @@ namespace CampaignHangar
                     if (entry.FullName.StartsWith("__MACOSX/", StringComparison.OrdinalIgnoreCase)) continue;
                     string target = GamePath(parts, package.Name);
                     if (target != null)
+                    {
+                        var previous = package.GameFiles.FirstOrDefault(f =>
+                            String.Equals(f.GamePath, target, StringComparison.OrdinalIgnoreCase));
+                        if (previous != null)
+                        {
+                            // The two Odyssey act launchers are a single game
+                            // target ONLY when they are byte-identical.  All
+                            // other collisions remain rejected.
+                            if (!String.Equals(target, "Maps/Odyssey/Odyssey Campaign Launcher.SC2Map",
+                                    StringComparison.OrdinalIgnoreCase) ||
+                                !entry.FullName.StartsWith("Odyssey/Odyssey/Odyssey Campaign Act ", StringComparison.OrdinalIgnoreCase) ||
+                                !previous.Entry.StartsWith("Odyssey/Odyssey/Odyssey Campaign Act ", StringComparison.OrdinalIgnoreCase) ||
+                                previous.Bytes != entry.Length)
+                                throw new InvalidDataException("서로 다른 ZIP 파일이 동일한 게임 설치 경로를 사용합니다: " + target);
+                            var first = zip.GetEntry(previous.Entry);
+                            if (first == null) throw new InvalidDataException("중복 런처의 원본 항목이 없습니다.");
+                            using (var hash = SHA256.Create())
+                            using (var stream = first.Open())
+                            using (var secondHash = SHA256.Create())
+                            using (var secondStream = entry.Open())
+                                if (!hash.ComputeHash(stream).SequenceEqual(secondHash.ComputeHash(secondStream)))
+                                    throw new InvalidDataException("오디세이 1막·2막의 공용 런처 파일 내용이 서로 다릅니다.");
+                            continue;
+                        }
                         package.GameFiles.Add(new StandaloneZipFile { Entry = entry.FullName, GamePath = target,
                             Bytes = entry.Length, IsMap = parts.Last().EndsWith(".SC2Map", StringComparison.OrdinalIgnoreCase),
                             IsModArchive = parts.Last().EndsWith(".SC2Mod", StringComparison.OrdinalIgnoreCase) });
+                    }
                     bool map = parts.Last().EndsWith(".SC2Map", StringComparison.OrdinalIgnoreCase);
                     bool exe = parts.Last().EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
                     if ((map || exe) && IsLauncher(entry.FullName))
@@ -312,7 +347,7 @@ namespace CampaignHangar
                 Directory.CreateDirectory(Path.GetDirectoryName(backup));
                 if (sameVolume)
                 {
-                    Directory.Move(current.Folder, backup);
+                Data.MoveDirectoryWithRetry(current.Folder, backup);
                     movedOld = backupReady = true;
                 }
                 else
@@ -322,11 +357,11 @@ namespace CampaignHangar
                     // its sibling so rollback remains possible on game volume.
                     CopyBackup(current.Folder, backup);
                     backupReady = true;
-                    Directory.Move(current.Folder, holding);
+                    Data.MoveDirectoryWithRetry(current.Folder, holding);
                     movedOld = true;
                 }
                 if (fault != null) fault(2);
-                Directory.Move(stage, current.Folder);
+                    Data.MoveDirectoryWithRetry(stage, current.Folder);
                 installedNew = true;
                 if (fault != null) fault(3);
                 string hash = Data.Hash(package.Zip);
@@ -352,10 +387,10 @@ namespace CampaignHangar
                 if (movedOld)
                 {
                     if (installedNew && Directory.Exists(current.Folder))
-                        Directory.Move(current.Folder, stage);
+                    Data.MoveDirectoryWithRetry(current.Folder, stage);
                     string restore = sameVolume ? backup : holding;
                     if (!Directory.Exists(current.Folder) && Directory.Exists(restore))
-                        Directory.Move(restore, current.Folder);
+                    Data.MoveDirectoryWithRetry(restore, current.Folder);
                 }
                 throw;
             }
@@ -415,6 +450,46 @@ namespace CampaignHangar
             return String.Equals(choice.Kind == "map" ? item.launcherMap : item.launcherExecutable,
                 start, StringComparison.OrdinalIgnoreCase);
         }
+        static bool OldOdysseyConnection(Campaign item, StandaloneZipPackage package, StandaloneZipChoice choice, string gameRoot)
+        {
+            // The original generic ZIP importer placed Odyssey under two
+            // extra wrapper directories. Preserve its existing campaign ID
+            // and play records when reconnecting the SAME ZIP after the
+            // corrected Maps/Odyssey mapping is installed.
+            if (item.kind != "external" || choice.Kind != "map" ||
+                ExternalCampaigns.LaunchMode(item) != "map" ||
+                !String.Equals(Path.GetFileName(choice.Entry), "Odyssey Campaign Launcher.SC2Map", StringComparison.OrdinalIgnoreCase) ||
+                !choice.Entry.StartsWith("Odyssey/Odyssey/Odyssey Campaign Act ", StringComparison.OrdinalIgnoreCase) ||
+                String.IsNullOrWhiteSpace(item.launcherMap)) return false;
+            string prefix = Path.Combine(Path.GetFullPath(gameRoot), "Maps", "Odyssey", "Odyssey") + "\\";
+            string old = Path.GetFullPath(item.launcherMap);
+            return old.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                (old.IndexOf("\\Odyssey Campaign Act I + Launcher\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 old.IndexOf("\\Odyssey Campaign Act II 01-13 + Launcher\\", StringComparison.OrdinalIgnoreCase) >= 0) &&
+                String.Equals(Path.GetFileName(old), "Odyssey Campaign Launcher.SC2Map", StringComparison.OrdinalIgnoreCase);
+        }
+        static bool GameFilesIntact(StandaloneZipPackage package, string gameRoot)
+        {
+            using (var archive = ZipFile.OpenRead(package.Zip))
+            using (var sha = SHA256.Create())
+                foreach (var file in package.GameFiles)
+                {
+                    string destination = Data.Under(gameRoot, file.GamePath);
+                    if (Directory.Exists(destination))
+                        throw new IOException("설치된 맵·모드 이름과 같은 폴더가 있습니다: " + destination);
+                    if (!File.Exists(destination)) return false;
+                    if (new FileInfo(destination).Length != file.Bytes)
+                        throw new IOException("설치된 파일의 내용이 ZIP과 다릅니다. 기존 파일을 덮지 않았습니다: " + destination);
+                    var entry = archive.GetEntry(file.Entry);
+                    if (entry == null || entry.Length != file.Bytes)
+                        throw new InvalidDataException("전용 ZIP 내용이 검사 이후 변경됐습니다.");
+                    using (var stream = entry.Open())
+                        if (!String.Equals(BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", ""),
+                                Data.Hash(destination), StringComparison.OrdinalIgnoreCase))
+                            throw new IOException("설치된 파일이 수정되었거나 손상되었습니다. 기존 파일을 덮지 않았습니다: " + destination);
+                }
+            return true;
+        }
         public static StandaloneZipResult Install(StandaloneZipPackage package, StandaloneZipChoice choice,
             string storageRoot, string gameRoot, ExternalCampaigns external, Action<WorkProgress> progress = null)
         {
@@ -442,12 +517,32 @@ namespace CampaignHangar
                     episodes = choice.Episodes.Select(entry => Data.Under(gameRoot,
                         package.GameFiles.Single(f => f.Entry == entry).GamePath)).ToArray();
             }
-            var prior = external.All().FirstOrDefault(c => SameConnection(c, choice, start, episodes));
+            var linked = external.All();
+            var prior = linked.FirstOrDefault(c => SameConnection(c, choice, start, episodes));
+            bool sameConnection = prior != null;
+            if (prior == null && !author)
+            {
+                var old = linked.Where(c => c.standaloneZipHash == archiveHash &&
+                    OldOdysseyConnection(c, package, choice, gameRoot)).ToList();
+                if (old.Count > 1) throw new IOException("오디세이 이전 연결이 여러 개 있어 자동 변경하지 않았습니다. 연결 목록을 확인해 주세요.");
+                if (old.Count == 1) prior = old[0];
+            }
             if (prior != null)
             {
                 if (prior.standaloneZipHash != archiveHash)
                     throw new IOException("이 시작점은 다른 ZIP 또는 기존 수동 연결에서 사용 중입니다. 기존 연결을 확인해 주세요.");
-                return new StandaloneZipResult { Campaign = prior, AlreadyLinked = true };
+                if (author)
+                {
+                    if (!File.Exists(executable))
+                        throw new IOException("연결된 제작자 런처가 누락됐습니다. 기존 실행 기록을 유지하며 재설치 전 확인이 필요합니다.");
+                    ExternalCampaigns.ValidateLauncher(executable);
+                    return new StandaloneZipResult { Campaign = prior, AlreadyLinked = true };
+                }
+                // A partial AV quarantine or a previous failed ZIP copy used
+                // to return AlreadyLinked while mission maps were absent.
+                // Reverify all map/mod bytes before treating the ZIP as ready.
+                if (sameConnection && GameFilesIntact(package, gameRoot))
+                    return new StandaloneZipResult { Campaign = prior, AlreadyLinked = true };
             }
             if (!author) ExternalCampaigns.RequireGameClosed(gameRoot);
 
@@ -478,7 +573,7 @@ namespace CampaignHangar
                                 CopyEntry(entry, destination, advance);
                             }
                             ExternalCampaigns.ValidateLauncher(Data.Under(stage, choice.Entry));
-                            Directory.Move(stage, baseFolder);
+                            Data.MoveDirectoryWithRetry(stage, baseFolder);
                             stage = null; created.Add(baseFolder);
                         }
                         ExternalCampaigns.ValidateLauncher(executable);
@@ -516,10 +611,12 @@ namespace CampaignHangar
                     }
                 }
                 var name = package.Name.Length > 120 ? package.Name.Substring(0, 120) : package.Name;
-                Campaign saved = external.Save(null, name,
+                Campaign saved = external.Save(prior == null ? null : prior.id, prior == null ? name : prior.name,
                     choice.Kind == "map" ? start : null, null, gameRoot,
-                    installMode, choice.Kind, author ? executable : null, episodes, archiveHash);
-                return new StandaloneZipResult { Campaign = saved, CreatedFiles = created.Count };
+                    prior == null ? installMode : prior.installationMode ?? "manual",
+                    choice.Kind, author ? executable : null, episodes, archiveHash);
+                return new StandaloneZipResult { Campaign = saved, CreatedFiles = created.Count,
+                    AlreadyLinked = sameConnection && created.Count == 0 };
             }
             catch
             {
@@ -536,6 +633,78 @@ namespace CampaignHangar
             {
                 if (stage != null && Directory.Exists(stage)) Directory.Delete(stage, true);
             }
+        }
+    }
+
+    // Some SC2 builds can open a custom campaign selector but fail the
+    // engine's GameSetNextMap transition. Directly opening a verified mission
+    // with SC2Switcher is an opt-in fallback: it never alters the map package,
+    // SC2 installation, Bank or creator launcher logic.
+    public sealed class OdysseyMissionDialog : ThemeForm
+    {
+        sealed class Choice
+        {
+            public string Label, Map;
+            public override string ToString() { return Label; }
+        }
+        readonly ListBox options;
+        public string SelectedMap { get { var choice = options.SelectedItem as Choice; return choice == null ? null : choice.Map; } }
+        public static bool Supports(Campaign item, string gameRoot)
+        {
+            if (item == null || item.kind != "external" ||
+                ExternalCampaigns.LaunchMode(item) != "map" ||
+                String.IsNullOrWhiteSpace(gameRoot) || String.IsNullOrWhiteSpace(item.launcherMap)) return false;
+            string expected = Path.Combine(Path.GetFullPath(gameRoot), "Maps", "Odyssey") + "\\";
+            string launcher = Path.GetFullPath(item.launcherMap);
+            return launcher.StartsWith(expected, StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(Path.GetFileName(launcher), "Odyssey Campaign Launcher.SC2Map",
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        public static string[] InstalledMissions(string gameRoot)
+        {
+            string directory = Path.Combine(Path.GetFullPath(gameRoot), "Maps", "Odyssey");
+            if (!Directory.Exists(directory)) return new string[0];
+            var maps = Directory.GetFiles(directory, "*.SC2Map", SearchOption.TopDirectoryOnly)
+                .Where(path => Regex.IsMatch(Path.GetFileName(path), "^Act (I|II) Mission [0-9]{2} - .+[.]SC2Map$", RegexOptions.IgnoreCase))
+                .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (var map in maps) ExternalCampaigns.ValidateMap(map, gameRoot);
+            return maps;
+        }
+        public OdysseyMissionDialog(string gameRoot)
+        {
+            Text = "오디세이 · 실행 방법 선택"; ClientSize = new Size(790, 590);
+            MinimumSize = new Size(650, 465); ShowInTaskbar = false;
+            Font = new Font("맑은 고딕", 11f);
+            BackColor = GlassTheme.Background; ForeColor = GlassTheme.Text;
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3,
+                Padding = new Padding(18), BackColor = GlassTheme.Background };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
+            Controls.Add(layout);
+            var text = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = GlassTheme.Text, BackColor = Color.Transparent,
+                Text = "기본: 제작자 임무선택 런처 실행\n" +
+                    "런처에서 임무로 넘어가지 않는 PC라면 설치된 맵을 직접 실행할 수 있습니다.\n" +
+                    "직접 실행은 제작자 런처의 선택 절차를 건너뜁니다. 캠페인 진행 상태는 다를 수 있습니다." };
+            layout.Controls.Add(text, 0, 0);
+            options = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false,
+                BackColor = GlassTheme.Field, ForeColor = GlassTheme.Text,
+                Font = new Font("맑은 고딕", 10.5f), HorizontalScrollbar = true };
+            options.Items.Add(new Choice { Label = "기본 · 오디세이 임무선택 런처", Map = null });
+            foreach (var map in InstalledMissions(gameRoot))
+                options.Items.Add(new Choice { Label = "임무 직접 실행 · " + Path.GetFileNameWithoutExtension(map), Map = map });
+            options.SelectedIndex = 0;
+            options.DoubleClick += delegate { if (options.SelectedItem != null) { DialogResult = DialogResult.OK; Close(); } };
+            layout.Controls.Add(options, 0, 1);
+            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false, Padding = new Padding(0, 10, 0, 0) };
+            var cancel = new MetalButton { Text = "취소", DialogResult = DialogResult.Cancel, Size = new Size(120, 46) };
+            var accept = new MetalButton { Text = "선택한 맵 실행", DialogResult = DialogResult.OK,
+                Primary = true, Size = new Size(168, 46) };
+            buttons.Controls.Add(cancel); buttons.Controls.Add(accept);
+            layout.Controls.Add(buttons, 0, 2);
+            AcceptButton = accept; CancelButton = cancel;
         }
     }
 

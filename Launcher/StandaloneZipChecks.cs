@@ -52,6 +52,20 @@ namespace CampaignHangar
             var repeat = StandaloneZip.Install(package, package.Choices[0], storage, game, external);
             Require(repeat.AlreadyLinked && external.All().Count == 1 && repeat.CreatedFiles == 0 &&
                 Data.Hash(normal) == originalHash, "repeat import preserves original and doesn't duplicate");
+            string missingMission = Path.Combine(game, "Maps", "Map-Launcher", "Campaign", "Mission01.SC2Map");
+            File.Delete(missingMission); // isolated antivirus-quarantine simulation
+            var repaired = StandaloneZip.Install(package, package.Choices[0], storage, game, external);
+            Require(!repaired.AlreadyLinked && repaired.CreatedFiles == 1 && repaired.Campaign.id == installed.Campaign.id &&
+                external.All().Count == 1 && Data.Hash(missingMission) == Data.Hash(Path.Combine(game, "Maps", "Map-Launcher", "Campaign", "Launcher.SC2Map")) &&
+                Data.Hash(normal) == originalHash,
+                "reimporting an already-linked ZIP restores its missing mission without replacing identity or original ZIP");
+            File.WriteAllBytes(missingMission, new byte[] { 77, 80, 81, 26, 9, 9, 9, 9 });
+            string editedMissionHash = Data.Hash(missingMission);
+            Rejected(() => StandaloneZip.Install(package, package.Choices[0], storage, game, external),
+                "reimport refuses to overwrite a user-modified installed mission");
+            Require(Data.Hash(missingMission) == editedMissionHash && external.All().Count == 1,
+                "failed repair preserves externally modified map and existing campaign ID");
+            File.WriteAllBytes(missingMission, mpq);
             string differentSource = Make(root, "Other-Launcher", zip => {
                 Add(zip, "Maps/Map-Launcher/Campaign/Launcher.SC2Map", mpq);
                 Add(zip, "Maps/Map-Launcher/Campaign/Different.SC2Map", mpq);
@@ -241,6 +255,67 @@ namespace CampaignHangar
             Require(StandaloneZip.Inspect(unknown).Choices.Count == 0, "unknown archive stays on manual fallback");
             string ccm = Make(root, "CCM", zip => Add(zip, "metadata.txt", new byte[] { 1 }));
             Require(!Library.MissingCcmMetadata(ccm), "CCM archive stays in CCM pipeline");
+            const string odysseyA = "Odyssey/Odyssey/Odyssey Campaign Act I + Launcher/";
+            const string odysseyB = "Odyssey/Odyssey/Odyssey Campaign Act II 01-13 + Launcher/";
+            string odyssey = Make(root, "Odyssey-KR", zip => {
+                Add(zip, odysseyA + "Odyssey Campaign Launcher.SC2Map", mpq);
+                Add(zip, odysseyA + "Act I Mission 01.SC2Map", mpq);
+                Add(zip, odysseyB + "Odyssey Campaign Launcher.SC2Map", mpq);
+                Add(zip, odysseyB + "Act II Mission 01.SC2Map", mpq);
+            });
+            var odysseyPackage = StandaloneZip.Inspect(odyssey);
+            Require(odysseyPackage.Choices.Count == 1 && odysseyPackage.GameFiles.Count == 3 &&
+                odysseyPackage.GameFiles.All(f => f.GamePath.StartsWith("Maps/Odyssey/", StringComparison.OrdinalIgnoreCase)) &&
+                odysseyPackage.GameFiles.Any(f => f.GamePath == "Maps/Odyssey/Odyssey Campaign Launcher.SC2Map"),
+                "Odyssey act wrappers map to one shared launcher and sibling mission maps");
+            var odysseyInstalled = StandaloneZip.Install(odysseyPackage, odysseyPackage.Choices[0],
+                storage, game, external);
+            Require(odysseyInstalled.CreatedFiles == 3 &&
+                File.Exists(Path.Combine(game, "Maps", "Odyssey", "Act I Mission 01.SC2Map")) &&
+                File.Exists(Path.Combine(game, "Maps", "Odyssey", "Act II Mission 01.SC2Map")) &&
+                !Directory.Exists(Path.Combine(game, "Maps", "Odyssey", "Odyssey")),
+                "Odyssey installs missions next to the launcher without nested wrappers");
+            string directI = Path.Combine(game, "Maps", "Odyssey", "Act I Mission 01 - Hell's Rejects.SC2Map");
+            string directII = Path.Combine(game, "Maps", "Odyssey", "Act II Mission 01 - Invasion Day.SC2Map");
+            File.WriteAllBytes(directI, mpq); File.WriteAllBytes(directII, mpq);
+            string switcher = Path.Combine(game, "Support64", "SC2Switcher_x64.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(switcher));
+            File.WriteAllText(switcher, "not executable; no process started in this fixture");
+            var directly = OdysseyMissionDialog.InstalledMissions(game);
+            Require(OdysseyMissionDialog.Supports(odysseyInstalled.Campaign, game) &&
+                directly.SequenceEqual(new[] { directI, directII }, StringComparer.OrdinalIgnoreCase) &&
+                ExternalCampaigns.LaunchInfo(new Campaign { kind = "external", launchMode = "map", launcherMap = directI }, game)
+                    .Arguments == "\"" + directI + "\"",
+                "Odyssey direct mission fallback offers only verified installed missions and uses the normal SC2Switcher map launch path");
+            string legacyGame = Path.Combine(root, "odyssey-old-game");
+            string legacyStorage = Path.Combine(root, "odyssey-old-storage");
+            Directory.CreateDirectory(legacyGame);
+            File.WriteAllText(Path.Combine(legacyGame, "StarCraft II.exe"), "fixture");
+            string oldLauncher = Path.Combine(legacyGame, "Maps", "Odyssey", "Odyssey",
+                "Odyssey Campaign Act I + Launcher", "Odyssey Campaign Launcher.SC2Map");
+            Directory.CreateDirectory(Path.GetDirectoryName(oldLauncher));
+            File.WriteAllBytes(oldLauncher, mpq);
+            var legacyLinks = new ExternalCampaigns(legacyStorage);
+            var legacy = legacyLinks.Save(null, "Odyssey 이전 설치", oldLauncher,
+                null, legacyGame, "manual", "map", null, null, Data.Hash(odyssey));
+            var migrated = StandaloneZip.Install(odysseyPackage, odysseyPackage.Choices[0],
+                legacyStorage, legacyGame, legacyLinks);
+            Require(!migrated.AlreadyLinked && migrated.CreatedFiles == 3 &&
+                migrated.Campaign.id == legacy.id && legacyLinks.All().Count == 1 &&
+                migrated.Campaign.name == legacy.name &&
+                migrated.Campaign.launcherMap == Path.Combine(legacyGame, "Maps", "Odyssey", "Odyssey Campaign Launcher.SC2Map") &&
+                File.Exists(oldLauncher) && Data.Hash(oldLauncher) == Data.Hash(migrated.Campaign.launcherMap),
+                "old Odyssey nested-launcher path reconnects in place without losing the existing campaign identity or deleting its old file");
+            string divergentOdyssey = Make(root, "Odyssey-Mismatch", zip => {
+                Add(zip, odysseyA + "Odyssey Campaign Launcher.SC2Map", mpq);
+                Add(zip, odysseyB + "Odyssey Campaign Launcher.SC2Map", translated);
+            });
+            Rejected(() => StandaloneZip.Inspect(divergentOdyssey),
+                "Odyssey shared launcher duplicates with differing bytes are rejected");
+            Require(File.Exists(Path.Combine(game, "Maps", "Odyssey", "Odyssey Campaign Launcher.SC2Map")) &&
+                Data.Hash(Path.Combine(game, "Maps", "Odyssey", "Odyssey Campaign Launcher.SC2Map")) ==
+                    Data.Hash(Path.Combine(game, "Maps", "Odyssey", "Act I Mission 01.SC2Map")),
+                "Odyssey validation leaves installed files intact");
             Console.WriteLine("STANDALONE ZIP PASS: map/EXE launchers, grouped episodes, dependencies, duplicate guard, safe remove-then-install with preserved backups, injected rollback at 3 phases, invalid MPQ and unsafe ZIP rejection; no real game or EXE launched.");
         }
     }

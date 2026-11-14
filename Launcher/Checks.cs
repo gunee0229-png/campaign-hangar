@@ -35,6 +35,35 @@ namespace CampaignHangar
             try { action(); } catch { rejected = true; }
             Assert(rejected, name);
         }
+        static void VerifyImportPublishLock(string root)
+        {
+            string fixture = Path.Combine(root, "held-import-publish");
+            string stage = Path.Combine(fixture, "import-staging");
+            string destination = Path.Combine(fixture, "packages", "auto-post-fixture", "versions", "version-fixture");
+            Directory.CreateDirectory(stage);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination));
+            string payload = Path.Combine(stage, "manifest.json");
+            File.WriteAllText(payload, "original-payload");
+            // Windows denies Directory.Move while a scanner/preview reader
+            // holds an unshared file handle inside the source folder.
+            var held = new FileStream(payload, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var release = System.Threading.Tasks.Task.Run(() => {
+                System.Threading.Thread.Sleep(420);
+                held.Dispose();
+            });
+            try { Library.PublishImportDirectory(stage, destination); }
+            finally { held.Dispose(); release.Wait(); }
+            Assert(!Directory.Exists(stage) && File.ReadAllText(Path.Combine(destination, "manifest.json")) == "original-payload",
+                "transient scanner-style handle lock is retried until atomic import version publication succeeds");
+            string anotherStage = Path.Combine(fixture, "another-import");
+            Directory.CreateDirectory(anotherStage);
+            File.WriteAllText(Path.Combine(anotherStage, "source.txt"), "never overwrite");
+            Reject(() => Library.PublishImportDirectory(anotherStage, destination),
+                "import publication refuses to overwrite existing campaign version");
+            Assert(File.ReadAllText(Path.Combine(destination, "manifest.json")) == "original-payload" &&
+                File.ReadAllText(Path.Combine(anotherStage, "source.txt")) == "never overwrite",
+                "failed publication keeps both the old version and the new temporary source intact");
+        }
         public static void VerifyExternalLinkUI(string root)
         {
             if (Directory.Exists(root)) throw new InvalidOperationException("External link UI check requires a new isolated directory.");
@@ -709,6 +738,7 @@ namespace CampaignHangar
                 VerifyContainerTransitions(root);
                 VerifyDeploymentMoves(root);
                 VerifyRemoval(root);
+                VerifyImportPublishLock(root);
                 string storageSource = Path.Combine(root, "storage-source");
                 string storageTarget = Path.Combine(root, "storage-target");
                 string preference = Path.Combine(root, "settings", "storage.json");
@@ -786,12 +816,74 @@ namespace CampaignHangar
                 Assert(Storage.DefaultDownloadsForGame(fixtureGame) == channelDownloads &&
                     Storage.DefaultForGame(fixtureGame) == gameStorage,
                     "game library and downloads always keep their chosen paths without automatic redirection");
+                // Real Program Files installs deny writes to the sibling
+                // CampaignStorage and game Downloads for standard users.
+                // Game path registration must never attempt either write,
+                // and must work even if the existing library has open files.
+                string protectedParent = Path.Combine(root, "read-only-game-parent-fixture");
+                string readonlyGame = Path.Combine(protectedParent, "StarCraft II");
+                Directory.CreateDirectory(readonlyGame);
+                File.WriteAllText(Path.Combine(readonlyGame, "StarCraft II.exe"), "fixture-game");
+                string noStorageMove = Path.Combine(protectedParent, AppChannel.StorageFolder);
+                string noDownloadMove = Path.Combine(readonlyGame, AppChannel.DownloadsFolder);
+                File.WriteAllText(noStorageMove, "must not replace");
+                File.WriteAllText(noDownloadMove, "must not replace");
+                string keptLibrary = Path.Combine(root, "game-only-preserved-library");
+                Directory.CreateDirectory(Path.Combine(keptLibrary, "packages"));
+                string keptFile = Path.Combine(keptLibrary, "packages", "open-handle.txt");
+                File.WriteAllText(keptFile, "installed-campaign-preserved");
+                string keptDownloads = Path.Combine(root, "game-only-preserved-downloads");
+                Directory.CreateDirectory(keptDownloads);
+                string keptZip = Path.Combine(keptDownloads, "owned.zip");
+                File.WriteAllText(keptZip, "ZIP remains unchanged");
+                string onlyGamePreference = Path.Combine(root, "game-only-prefs", "storage.json");
+                string onlyDownloadPreference = Path.Combine(root, "game-only-prefs", "downloads.json");
+                string lockedHash = Data.Hash(keptFile), zipHash = Data.Hash(keptZip);
+                using (var held = new FileStream(keptFile, FileMode.Open, FileAccess.Read, FileShare.None))
+                    Storage.ConnectGameOnly(keptLibrary, readonlyGame, onlyGamePreference,
+                        onlyDownloadPreference, keptDownloads);
+                Assert(Storage.ResolveGame(onlyGamePreference, null) == readonlyGame &&
+                    Storage.Resolve(onlyGamePreference) == keptLibrary &&
+                    Storage.ResolveDownloads(onlyDownloadPreference, onlyGamePreference) == keptDownloads &&
+                    Data.Hash(keptFile) == lockedHash && Data.Hash(keptZip) == zipHash &&
+                    File.ReadAllText(noStorageMove) == "must not replace" &&
+                    File.ReadAllText(noDownloadMove) == "must not replace",
+                    "game-only connection succeeds with in-use library and protected Program Files-style targets without migrating any user data");
+                string onlyBeforeReject = File.ReadAllText(onlyGamePreference);
+                Reject(() => Storage.ConnectGameOnly(keptLibrary, Path.Combine(root, "missing-game"),
+                    onlyGamePreference, onlyDownloadPreference, keptDownloads),
+                    "invalid game-only selection refused");
+                Data.Write(Path.Combine(keptLibrary, "active.json"),
+                    new State { active = "installed", gameRoot = Path.Combine(root, "another-game") });
+                Reject(() => Storage.ConnectGameOnly(keptLibrary, readonlyGame,
+                    onlyGamePreference, onlyDownloadPreference, keptDownloads),
+                    "game-only selection refuses switching away from an active mapped campaign");
+                Assert(File.ReadAllText(onlyGamePreference) == onlyBeforeReject &&
+                    Data.Hash(keptFile) == lockedHash && Data.Hash(keptZip) == zipHash,
+                    "rejected game-only selection preserves paths, campaigns and ZIPs");
                 string deniedText = Storage.AccessDeniedGuidance(protectedLibrary, protectedDownloads);
                 Assert(deniedText.Contains("관리자 권한으로 실행") &&
                     deniedText.Contains(protectedLibrary) && deniedText.Contains(protectedDownloads) &&
+                    deniedText.Contains("백신") && deniedText.Contains("실시간 감시") &&
+                    deniedText.Contains("즉시 다시 켜세요") &&
                     deniedText.Contains("자동 변경하지 않았습니다") &&
                     File.ReadAllText(blockedParent) == "must not be replaced by a directory",
-                    "access denied message instructs admin restart and preserves original selected paths");
+                    "access denied message leads with admin restart, then AV exclusion and temporary AV diagnostic, preserving paths");
+                Assert(Storage.IsAccessFailure(new UnauthorizedAccessException("fixture")) &&
+                    Storage.IsAccessFailure(new IOException("wrapped stage move blocked",
+                        new UnauthorizedAccessException("access denied by filesystem"))) &&
+                    Storage.IsAccessFailure(new AggregateException(new IOException("wrapped",
+                        new UnauthorizedAccessException("locked")))) &&
+                    !Storage.IsAccessFailure(new IOException("invalid file path")) &&
+                    !Storage.IsAccessFailure(new InvalidDataException("invalid manifest")),
+                    "access failure classification follows nested IOException/aggregate Win32 errors without mislabeling invalid paths");
+                string invalidGameText = Storage.GamePathFailureGuidance("X:\\missing-game", protectedLibrary,
+                    protectedDownloads, new IOException("StarCraft II.exe 파일이 없습니다."));
+                Assert(invalidGameText.Contains("관리자 권한으로 실행") &&
+                    invalidGameText.Contains("백신 실시간 감시") &&
+                    invalidGameText.Contains("즉시 다시 켜세요") &&
+                    invalidGameText.Contains("StarCraft II.exe"),
+                    "even non-permission game path selection failures explain executable selection and offer admin/AV troubleshooting");
                 string configuredNoDownloads = Path.Combine(root, "game-with-legacy-download-setting.json");
                 Data.Write(configuredNoDownloads, new StoragePreference {
                     path = storageTarget, gameRoot = fixtureGame, downloadsPath = null });

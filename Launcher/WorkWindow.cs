@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -107,20 +108,35 @@ namespace CampaignHangar
 
         void SaveWorkWindowGeometry()
         {
-            if(hubWorkWindow==null||!hubWorkWindow.Visible||hubWorkWindow.WindowState!=FormWindowState.Normal)return;
-            try{WindowSize.Save(hubWorkWindow,WorkWindowPreference);}
-            catch(Exception error){status.Text="진행창 위치 저장 실패 · "+error.Message;}
+            var window=hubWorkWindow;
+            if(window==null||window.IsDisposed||window.Disposing||!window.Visible||window.WindowState!=FormWindowState.Normal)return;
+            try{WindowSize.Save(window,WorkWindowPreference);}
+            catch(Exception error){if(!IsDisposed)status.Text="진행창 위치 저장 실패 · "+error.Message;}
         }
         void CloseHubWorkWindow()
         {
-            SaveWorkWindowGeometry();
+            // WebView messages, FormClosing and owner teardown can all request
+            // closure during the same UI event. Close() dispatches callbacks
+            // synchronously, so never dereference the mutable field *after*
+            // that call. A previous release could throw NullReferenceException
+            // in LiveHubMessage/work-window-hide while a close was in progress.
+            if(hubWorkWindowClosing)return;
             hubWorkWindowClosing=true;
+            WorkProgressFrame closing=hubWorkWindow;
             try{
-                if(hubWorkWindow!=null){hubWorkWindow.Close();hubWorkWindow.Dispose();}
+                SaveWorkWindowGeometry();
                 hubWorkWindow=null;hubWorkWindowWeb=null;hubWorkWindowReady=false;
+                if(closing!=null&&!closing.IsDisposed){
+                    closing.Close();
+                    if(!closing.IsDisposed)closing.Dispose();
+                }
             }finally{hubWorkWindowClosing=false;}
-            if(hubWeb!=null&&!hubWeb.IsDisposed&&hubWeb.CoreWebView2!=null)
-                hubWeb.ExecuteScriptAsync("window.UiLab&&UiLab.workWindowAttached(false)");
+            if(hubWeb!=null&&!hubWeb.IsDisposed&&!hubWeb.Disposing&&hubWeb.CoreWebView2!=null)
+            {
+                try{hubWeb.ExecuteScriptAsync("window.UiLab&&UiLab.workWindowAttached(false)");}
+                catch(ObjectDisposedException){}
+                catch(InvalidOperationException){}
+            }
         }
         void DismissHubWorkWindow()
         {
@@ -132,6 +148,37 @@ namespace CampaignHangar
             if (hubWeb != null && !hubWeb.IsDisposed && hubWeb.CoreWebView2 != null)
                 hubWeb.ExecuteScriptAsync("window.UiLab&&UiLab.dismissWorkWindow()");
         }
+        // Earlier updater manifests intentionally omit progress.html because
+        // this page is embedded in the EXE. WebView2 virtual-host mappings,
+        // however, can fail to navigate to a resource that has no corresponding
+        // on-disk file. Developer builds happen to retain that file, while
+        // installed releases do not. Stage only this app-owned UI page and its
+        // four local stylesheets under the writable UI profile; never write
+        // into Program Files or add an unexpected member to old update ZIPs.
+        string WorkPageFolder()
+        {
+            string bundled=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"assets","ui-hub");
+            if(File.Exists(Path.Combine(bundled,"progress.html")))return bundled;
+            string target=Path.Combine(hubProfileRoot,"work-window-page");
+            Directory.CreateDirectory(target);
+            using(var embedded=typeof(Hangar).Assembly.GetManifestResourceStream("CampaignHangar.Progress"))
+            {
+                if(embedded==null)throw new InvalidDataException("내장 작업 진행창 HTML을 찾지 못했습니다.");
+                string html;
+                using(var reader=new StreamReader(embedded,Encoding.UTF8,true))html=reader.ReadToEnd();
+                string page=Path.Combine(target,"progress.html");
+                if(!File.Exists(page)||File.ReadAllText(page,Encoding.UTF8)!=html)
+                    File.WriteAllText(page,html,new UTF8Encoding(false));
+            }
+            foreach(string name in new[]{"ui.css","hub-features.css","ui-refinements.css","ui-usability.css"})
+            {
+                string source=Path.Combine(bundled,name),dest=Path.Combine(target,name);
+                if(!File.Exists(source))throw new FileNotFoundException("배포판 작업 진행창 스타일이 없습니다.",source);
+                if(!File.Exists(dest)||Data.Hash(source)!=Data.Hash(dest))
+                    File.Copy(source,dest,true);
+            }
+            return target;
+        }
         async void ShowHubWorkWindow(string json)
         {
             if((!hubProgressActive&&!hubWorkWindowQaEnabled)||!CanShowHubWorkScreen())return;
@@ -142,7 +189,9 @@ namespace CampaignHangar
             if (state.workId == hubWorkWindowDismissedWorkId) return;
             hubWorkWindowState=state;
             if(hubWorkWindow!=null){
-                if(hubWorkWindowReady)hubWorkWindowWeb.CoreWebView2.PostWebMessageAsJson(json);
+                if(hubWorkWindowReady&&hubWorkWindowWeb!=null&&!hubWorkWindowWeb.IsDisposed&&
+                    hubWorkWindowWeb.CoreWebView2!=null)
+                    hubWorkWindowWeb.CoreWebView2.PostWebMessageAsJson(json);
                 return;
             }
             var window=new WorkProgressFrame {Text="커캠 격납고 · 작업 진행",AutoScaleMode=AutoScaleMode.None,
@@ -180,7 +229,7 @@ namespace CampaignHangar
                 core.Settings.AreDefaultContextMenusEnabled=false;
                 core.Settings.IsStatusBarEnabled=false;
                 core.SetVirtualHostNameToFolderMapping("hangar-live.test",
-                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"assets","ui-hub"),
+                    WorkPageFolder(),
                     CoreWebView2HostResourceAccessKind.DenyCors);
                 core.AddWebResourceRequestedFilter("https://hangar-live.test/progress.html",CoreWebView2WebResourceContext.Document);
                 core.WebResourceRequested+=delegate(object sender,CoreWebView2WebResourceRequestedEventArgs e){
@@ -248,9 +297,41 @@ namespace CampaignHangar
                     throw new InvalidOperationException("Detached work native edge clipped: " + phase + " " + p);
         }
 
+        internal async Task VerifyDetachedWorkWindowOnlyAsync(string output)
+        {
+            if(!isolated||online)throw new InvalidOperationException("Detached window QA must be isolated and offline.");
+            Directory.CreateDirectory(output);
+            for(int i=0;i<100&&!hubReady;i++)await Task.Delay(100);
+            if(!hubReady||hubWeb==null||hubWeb.CoreWebView2==null)
+                throw new InvalidOperationException("Themed WebView did not become ready for detached-window QA.");
+            if(LiveTheme.Current==LiveTheme.Classic)LiveTheme.Select(LiveTheme.Resolve("terran"));
+            ShowPage(homePage);
+            await hubWeb.ExecuteScriptAsync("UiLab.finishBoot();UiLab.setView('all');");
+            await Task.Delay(250);
+            if(!CanShowHubWorkScreen())
+                throw new InvalidOperationException("Work window QA requires a visible themed WebView surface.");
+            await VerifyDetachedWorkWindowAsync(output);
+        }
         async Task VerifyDetachedWorkWindowAsync(string output)
         {
             if(!isolated)throw new InvalidOperationException("Detached work QA must use an isolated profile.");
+            // The preceding artwork QA intentionally stretches the owner to
+            // 3840x2160, even on FHD monitors. Native owned-window positioning
+            // must be measured with a real on-screen client viewport instead
+            // of an off-monitor synthetic 4K desktop.
+            var workArea=Screen.FromControl(this).WorkingArea;
+            if(ClientSize.Width>workArea.Width||ClientSize.Height>workArea.Height)
+            {
+                ClientSize=new Size(Math.Min(ClientSize.Width,workArea.Width),
+                    Math.Min(ClientSize.Height,workArea.Height));
+                await Task.Delay(160);
+            }
+            // A previously saved detached-window position is intentionally
+            // restored, not anchored to the fullscreen work panel. Capture
+            // that preference before Show() so the QA does not mistake the
+            // correct restored position for a 32px placement regression.
+            WindowPreference previouslySaved=File.Exists(WorkWindowPreference) ?
+                Data.Read<WindowPreference>(WorkWindowPreference):null;
             hubWorkWindowQaEnabled=true;
             Task cleanup=null;
             try{
@@ -260,7 +341,22 @@ namespace CampaignHangar
                         title:'격리 검수 · 외부 진행창',stage:'실측 파일 확인',completed:1,total:4,cancelable:true});
                     document.getElementById('bootBrowse').click();");
                 if(await Task.WhenAny(hubWorkWindowQaRendered.Task,Task.Delay(15000))!=hubWorkWindowQaRendered.Task)
-                    throw new InvalidOperationException("Detached work window did not render.");
+                {
+                    string clientState="(unavailable)";
+                    try {
+                        clientState=await hubWeb.ExecuteScriptAsync(@"(function(){
+                            var b=document.getElementById('boot'),x=document.getElementById('bootBrowse');
+                            return JSON.stringify({boot:b&&b.className,browse:x&&x.textContent,
+                                body:document.body.className,webview:location.href});
+                        })()");
+                    } catch(Exception inspectError) {clientState=inspectError.Message;}
+                    throw new InvalidOperationException("Detached work window did not render. " +
+                        "hubReady="+hubReady+", available="+CanShowHubWorkScreen()+
+                        ", detached="+(hubWorkWindow!=null)+", ready="+hubWorkWindowReady+
+                        ", state="+(hubWorkWindowState!=null)+", closing="+hubWorkWindowClosing+
+                        ", theme="+LiveTheme.Current.Id+", status="+status.Text+
+                        ", UI="+clientState);
+                }
                 if(hubWorkWindow==null||!hubWorkWindow.TopLevel||hubWorkWindow.Owner!=this)
                     throw new InvalidOperationException("Work progress must be an independent owned window.");
                 if(hubWorkWindow.FormBorderStyle!=FormBorderStyle.None)
@@ -287,9 +383,24 @@ namespace CampaignHangar
                     (int)Math.Round(initial.y*(double)hubWeb.ClientSize.Height/initial.viewHeight)));
                 var actual=hubWorkWindow.PointToScreen(Point.Empty);
                 var initialArea=Screen.FromPoint(expected).WorkingArea;
-                if(initialArea.Contains(new Rectangle(expected,hubWorkWindow.ClientSize))&&
+                if(previouslySaved==null&&initialArea.Contains(new Rectangle(expected,hubWorkWindow.ClientSize))&&
                     (Math.Abs(expected.X-actual.X)>1||Math.Abs(expected.Y-actual.Y)>1))
-                    throw new InvalidOperationException("First detached window did not use the fullscreen panel position.");
+                    throw new InvalidOperationException("First detached window did not use the fullscreen panel position. " +
+                        "Expected client origin=" + expected + ", actual=" + actual +
+                        ", window=" + hubWorkWindow.Bounds + ", active screen=" + initialArea +
+                        ", owner=" + Bounds + ", view=" + hubWeb.Bounds);
+                if(previouslySaved!=null&&previouslySaved.left.HasValue&&previouslySaved.top.HasValue)
+                {
+                    var oldBounds=new Rectangle(previouslySaved.left.Value,previouslySaved.top.Value,
+                        previouslySaved.width,previouslySaved.height);
+                    var oldScreen=Screen.FromRectangle(oldBounds).WorkingArea;
+                    var expectedOld=new Point(
+                        Math.Max(oldScreen.Left,Math.Min(oldScreen.Right-hubWorkWindow.Width,previouslySaved.left.Value)),
+                        Math.Max(oldScreen.Top,Math.Min(oldScreen.Bottom-hubWorkWindow.Height,previouslySaved.top.Value)));
+                    if(Math.Abs(expectedOld.X-hubWorkWindow.Left)>1||Math.Abs(expectedOld.Y-hubWorkWindow.Top)>1)
+                        throw new InvalidOperationException("Detached window failed to restore saved position. Expected="+
+                            expectedOld+" actual="+hubWorkWindow.Location);
+                }
                 var area=Screen.FromControl(this).WorkingArea;
                 hubWorkWindow.Bounds=new Rectangle(area.Left+10,area.Top+10,420,280);
                 VerifyWorkFrameCorners("420x280");

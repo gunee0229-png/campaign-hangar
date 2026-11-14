@@ -95,6 +95,28 @@ namespace CampaignHangar
         public HubUserLayout layout { get; set; }
         public Dictionary<string,HubUserLayout> named { get; set; }
     }
+    internal sealed class HubCustomPreset
+    {
+        public string id { get; set; }
+        public string name { get; set; }
+        public string theme { get; set; }
+        public HubUserLayout layout { get; set; }
+        public bool shared { get; set; }
+        public string created { get; set; }
+    }
+    internal sealed class HubCustomPresetStore
+    {
+        public int schema { get; set; }
+        public List<HubCustomPreset> items { get; set; }
+    }
+    internal sealed class HubCustomPresetExchange
+    {
+        public string format { get; set; }
+        public int version { get; set; }
+        public string name { get; set; }
+        public string theme { get; set; }
+        public HubUserLayout layout { get; set; }
+    }
     internal sealed class HubDialogPalette
     {
         public string theme {get;set;}
@@ -111,12 +133,14 @@ namespace CampaignHangar
         WebView2 hubWeb;
         Label hubFallback;
         bool hubInitializing, hubReady;
-        string hubProfileRoot, hubFavoritesFile, hubLayoutFile, hubPendingArchiveId;
+        string hubProfileRoot, hubFavoritesFile, hubLayoutFile, hubHiddenCampaignsFile, hubPresetLibraryFile, hubPendingArchiveId;
+        bool hubPendingArchiveReviews, hubRecommendationInFlight;
         Panel hubEmbeddedArchive;
         Form hubArchiveWindow;
         HubEmbeddedRect hubLastArchiveRect;
         bool hubArchiveOpenRequested, hubDistributionActive, hubArchiveRequestedVisible,
             hubArchiveSuspendedByIntro;
+        bool hubShuttingDown;
         int hubWorkDepth;
         string hubWorkTitle;
         int hubFlowDepth;
@@ -150,7 +174,9 @@ namespace CampaignHangar
             try
             {
                 hubEditorWindow = new ThemeForm { Text = "커스텀 편집 · " + LiveTheme.Current.Name,
-                    ClientSize = new Size(520,780), MinimumSize = new Size(460,560), ShowInTaskbar = true };
+                    ClientSize = new Size(780,780), MinimumSize = new Size(480,560),
+                    FormBorderStyle = FormBorderStyle.Sizable, MaximizeBox = true,
+                    SizeGripStyle = SizeGripStyle.Show, ShowInTaskbar = true };
                 window=hubEditorWindow;
                 hubEditorWeb = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = GlassTheme.Background };
                 var web=hubEditorWeb;
@@ -189,7 +215,7 @@ namespace CampaignHangar
                             if (hubEditorState != null) core.PostWebMessageAsJson(hubEditorState);
                             hubWeb.ExecuteScriptAsync("window.HangarFeatures.syncExternalEditor()");
                         }
-                        else if (new[]{"close","choice","button","field","range","color","text","all"}.Contains(Convert.ToString(action)))
+                        else if (new[]{"close","choice","button","field","range","color","text","all","preset-name"}.Contains(Convert.ToString(action)))
                             hubWeb.ExecuteScriptAsync("window.HangarFeatures.editorCommand(" + Data.Json.Serialize(request) + ")");
                     }
                     catch (Exception error) { System.Diagnostics.Trace.WriteLine("Editor request: "+error.Message); }
@@ -320,6 +346,399 @@ namespace CampaignHangar
                     Data.Json.Serialize(payload)+")");
             }
             catch (Exception error) { System.Diagnostics.Trace.WriteLine("Hub work UI: " + error.Message); }
+        }
+
+        // Local-only CASE 20 checks for hidden cards, sharing, preset storage
+        // and the real detached editor surface. No network vote or game write.
+        internal async Task VerifyHiddenAndSharedUiAsync(string output)
+        {
+            if(!isolated||online||!AppChannel.HasThemedUi)
+                throw new InvalidOperationException("Hidden/share QA requires an isolated offline themed app.");
+            Directory.CreateDirectory(output);
+            for(int i=0;i<100&&!hubReady;i++)await Task.Delay(100);
+            if(!hubReady||hubWeb==null||hubWeb.CoreWebView2==null)
+                throw new InvalidOperationException("Themed WebView2 did not initialize.");
+            // At high DPI a compact archive viewport used to re-show the
+            // header marked [hidden] because the narrow CSS forced display:flex.
+            // Keep real archive navigation visible without repeating the
+            // campaign preview title or stats above the embedded website.
+            Size originalClientSize=ClientSize;
+            try
+            {
+                ClientSize=new Size(1050,Math.Min(900,Math.Max(720,originalClientSize.Height)));
+                await Task.Delay(340);
+                var archiveHeader=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
+                    if(innerWidth>1120)return 'not-compact:'+innerWidth;
+                    var w=document.getElementById('workspace');
+                    var h=w.querySelector('.workspace-header');
+                    var embed=document.getElementById('archiveEmbed');
+                    var frame=document.getElementById('archiveMount');
+                    var actions=[...document.querySelectorAll('.archive-embed-actions [data-archive-action]')];
+                    if(w.dataset.view!=='archive'||!h.hidden)return 'archive-state';
+                    if(getComputedStyle(h).display!=='none'||h.getBoundingClientRect().height>0)return 'duplicate-archive-header';
+                    if(embed.hidden||getComputedStyle(embed).display==='none'||frame.getBoundingClientRect().height<120)
+                        return 'archive-content-hidden';
+                    if(actions.length!==4||actions.some(function(a){return a.getBoundingClientRect().height<25;}))
+                        return 'archive-navigation-hidden';
+                    if(document.documentElement.scrollWidth>document.documentElement.clientWidth+3)
+                        return 'archive-horizontal-overflow';
+                    return 'ok';
+                })()"));
+                if(archiveHeader!="ok")
+                    throw new InvalidOperationException("Compact archive header regression: "+archiveHeader);
+                using(var screenshot=File.Create(Path.Combine(output,"archive-compact-header-hidden.png")))
+                    await hubWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,screenshot);
+            }
+            finally { ClientSize=originalClientSize; }
+            Console.WriteLine("WEBVIEW COMPACT ARCHIVE PASS: hidden preview/stats remain hidden; embedded site, four navigation actions and overflow verified.");
+            var legacyActions=CleanHubActions(new[]{"installButton","launchButton",
+                "screenshotButton","detailButton","importZipButton"});
+            if(!legacyActions.SequenceEqual(new[]{"installButton","launchButton",
+                "screenshotButton","detailButton","reviewButton","recommendButton",
+                "importZipButton"}))
+                throw new InvalidOperationException("Old custom button order was not preserved while inserting new social actions before ZIP.");
+            var rows=new[]{
+                new LiveHubEntry {id="hide-qa-a",name="가림 검증",en="HIDE QA",category="자날",
+                    installed=true,kind="ccm",author="QA",img="assets/hangar.jpg"},
+                new LiveHubEntry {id="hide-qa-b",name="남는 캠페인",en="VISIBLE QA",category="군심",
+                    installed=true,kind="ccm",author="QA",img="assets/hangar.jpg"}
+            };
+            await hubWeb.ExecuteScriptAsync("UiLab.setRealCampaigns("+Data.Json.Serialize(rows)+",2);UiLab.setView('all');");
+            // The action rail itself may be resized by a custom layout even
+            // if the desktop window remains wide. Verify labels and icons at
+            // the actual allocated rail width rather than viewport alone.
+            await hubWeb.ExecuteScriptAsync("document.querySelector('.action-strip').style.width='670px'");
+            await Task.Delay(180);
+            var compactActions=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(@"(function(){
+                var rail=document.querySelector('.action-strip'),items=[...rail.querySelectorAll('.action-button')];
+                var expected=['적용','설치','정보','스샷','리뷰','추천','ZIP'];
+                return rail.dataset.compactActions==='true' && items.length===7 &&
+                  items.every(function(item,i){
+                    var short=item.querySelector('.action-label-compact');
+                    var full=item.querySelector('.action-label-full');
+                    var icon=item.querySelector('.action-icon svg');
+                    var box=item.getBoundingClientRect();
+                    return short&&short.textContent===expected[i] &&
+                      getComputedStyle(short).display!=='none' &&
+                      getComputedStyle(full).display==='none' &&
+                      icon&&getComputedStyle(item.querySelector('.action-icon')).display!=='none' &&
+                      box.width>=60 && box.right<=rail.getBoundingClientRect().right+2 &&
+                      item.getAttribute('aria-label')&&item.title;
+                  });
+            })()"));
+            if(!(compactActions is bool)||!(bool)compactActions)
+                throw new InvalidOperationException("Narrow action rail did not retain icons and exact abbreviated labels.");
+            await hubWeb.ExecuteScriptAsync("document.querySelector('.action-strip').style.width='1180px'");
+            bool fullActions=false;
+            for(int i=0;i<25&&!fullActions;i++)
+            {
+                await Task.Delay(100);
+                fullActions=Convert.ToBoolean(Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(@"(function(){
+                var rail=document.querySelector('.action-strip'),items=[...rail.querySelectorAll('.action-button')];
+                return rail.dataset.compactActions==='false'&&items.length===7 &&
+                  items.every(function(item){
+                    return getComputedStyle(item.querySelector('.action-label-compact')).display==='none' &&
+                      getComputedStyle(item.querySelector('.action-label-full')).display!=='none';
+                  });
+                })()")));
+            }
+            if(!fullActions)
+            {
+                var reason=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"JSON.stringify((function(){
+                    var r=document.querySelector('.action-strip');
+                    return {width:r.getBoundingClientRect().width,compact:r.dataset.compactActions,
+                        windowWidth:innerWidth,items:[...r.querySelectorAll('.action-button')].map(function(b){
+                            return {id:b.id,full:getComputedStyle(b.querySelector('.action-label-full')).display,
+                                short:getComputedStyle(b.querySelector('.action-label-compact')).display};
+                        })};
+                })())"));
+                throw new InvalidOperationException("Wide action rail did not restore complete button labels: "+reason);
+            }
+            await hubWeb.ExecuteScriptAsync("document.querySelector('.action-strip').style.removeProperty('width')");
+            Console.WriteLine("WEBVIEW RESPONSIVE ACTIONS PASS: allocated-width abbreviations, 7 icons, full tooltips and full labels restored.");
+            string behavior=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
+                var ui=UiLab,root=document,hidden=root.getElementById('showHiddenCampaigns');
+                var buttons=[...root.querySelectorAll('.action-strip>.action-button')].map(b=>b.id);
+                if(buttons.indexOf('recommendButton')!==buttons.indexOf('importZipButton')-1 ||
+                   buttons.indexOf('reviewButton')!==buttons.indexOf('recommendButton')-1)
+                    return 'quick-action-order';
+                var visualButtons=[...root.querySelectorAll('.action-strip>.action-button')]
+                    .sort((a,b)=>Number(getComputedStyle(a).order)-Number(getComputedStyle(b).order))
+                    .map(b=>b.id);
+                if(visualButtons.indexOf('recommendButton')!==visualButtons.indexOf('importZipButton')-1 ||
+                   visualButtons.indexOf('reviewButton')!==visualButtons.indexOf('recommendButton')-1)
+                    return 'saved-layout-visual-order';
+                if(!hidden||hidden.getAttribute('aria-pressed')!=='false'||
+                   !root.querySelector('.search-with-hidden').contains(hidden))return 'eye-location';
+                var card=root.querySelector('[data-card=hide-qa-a]');
+                card.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,
+                    clientX:100,clientY:100}));
+                var menu=root.getElementById('cardContextMenu');
+                if(menu.hidden||menu.querySelector('[data-card-action=visibility]').textContent!=='캠페인 숨기기')
+                    return 'card-context-visibility';
+                menu.querySelector('[data-card-action=visibility]').click();
+                if(root.querySelector('[data-card=hide-qa-a]')||
+                   root.querySelectorAll('[data-card]').length!==1)return 'card-not-hidden';
+                hidden.click();
+                if(hidden.getAttribute('aria-pressed')!=='true'||
+                   !root.querySelector('[data-card=hide-qa-a].is-hidden-campaign')||
+                   !root.querySelector('[data-card=hide-qa-a] .card-hidden-label'))
+                    return 'hidden-view-not-restored';
+                if(!root.querySelector('#hiddenCampaignCount') ||
+                   root.querySelector('#hiddenCampaignCount').textContent!=='1')
+                    return 'hidden-counter';
+                hidden.click();
+                if(root.querySelector('[data-card=hide-qa-a]'))return 'hidden-view-not-closed';
+                if(!root.getElementById('recommendButton')||!root.getElementById('reviewButton'))
+                    return 'social-buttons-missing';
+                return 'ok';
+            })()"));
+            if(behavior!="ok")throw new InvalidOperationException("Hidden card/quick action UI: "+behavior);
+            for(int i=0;i<30&&!File.Exists(hubHiddenCampaignsFile);i++)await Task.Delay(100);
+            if(!File.Exists(hubHiddenCampaignsFile) ||
+                !(Data.Read<List<string>>(hubHiddenCampaignsFile)??new List<string>()).Contains("hide-qa-a"))
+                throw new InvalidOperationException("Hidden card choice did not persist into isolated profile.");
+            await hubWeb.ExecuteScriptAsync("UiLab.setHiddenCampaignIds(['hide-qa-a'])");
+            var persistent=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(
+                "UiLab.filtered().length===1&&UiLab.filtered()[0].id==='hide-qa-b'"));
+            if(!(persistent is bool)||!(bool)persistent)
+                throw new InvalidOperationException("Hidden campaign list was not restored.");
+            Console.WriteLine("WEBVIEW HIDDEN PASS: right-click hide, eye toggle, visible count, isolated disk readback.");
+            if((await archiveView.RecommendCampaignAsync("hide-qa-a")).ok)
+                throw new InvalidOperationException("Isolated UI must never submit a public recommendation.");
+            var reviewUrl=ArchiveView.CampaignReviewUrl(new Campaign {
+                id="qa-site",kind="ccm",categories=new[]{"gallery"}
+            });
+            if(!reviewUrl.Contains("campaign=qa-site&view=reviews#gallery"))
+                throw new InvalidOperationException("Review action did not build the site's review-writing deep link.");
+            Console.WriteLine("WEBVIEW SOCIAL PASS: review deep-link and offline recommendation guard; no production votes.");
+            // Simulate the archive's successful reply only inside this isolated
+            // fixture. A successful click bursts into stars instead of opening
+            // a message modal. A duplicate retains the 1.5s fading notice.
+            var firstVote=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(@"(function(){
+                UiLab.selectCampaign('hide-qa-b');
+                UiLab.recommendationResult('hide-qa-b',true,9,'',false);
+                var notice=document.getElementById('recommendationNotice');
+                var burst=document.getElementById('recommendationBurst');
+                return notice.hidden && !burst.hidden &&
+                    !!burst.querySelector('.recommendation-burst-core') &&
+                    burst.querySelectorAll('.recommendation-burst-star').length===18 &&
+                    getComputedStyle(burst).pointerEvents==='none';
+            })()"));
+            if(!(firstVote is bool)||!(bool)firstVote)
+                throw new InvalidOperationException("A successful recommendation did not produce the starburst without a modal.");
+            await Task.Delay(250);
+            using(var signalScreenshot=File.Create(Path.Combine(output,"recommend-starburst-terran.png")))
+                await hubWeb.CoreWebView2.CapturePreviewAsync(
+                    CoreWebView2CapturePreviewImageFormat.Png,signalScreenshot);
+            await Task.Delay(1390);
+            var gone=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(
+                "document.getElementById('recommendationBurst').hidden"));
+            if(!(gone is bool)||!(bool)gone)
+                throw new InvalidOperationException("The 1.5-second recommendation stars did not disappear.");
+            var repeated=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(@"(function(){
+                document.getElementById('recommendButton').click();
+                var notice=document.getElementById('recommendationNotice');
+                return !notice.hidden&&notice.dataset.phase==='duplicate' &&
+                    document.getElementById('recommendationDescription').textContent===
+                      '각 캠페인당 하루 한 번만 추천 가능합니다.';
+            })()"));
+            if(!(repeated is bool)||!(bool)repeated)
+                throw new InvalidOperationException("Second recommendation click did not show the once-per-day warning.");
+            await Task.Delay(1215);
+            var fading=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(
+                "document.getElementById('recommendationNotice').classList.contains('is-fading')"));
+            if(!(fading is bool)||!(bool)fading)
+                throw new InvalidOperationException("Daily limit notice did not start its soft fade.");
+            await Task.Delay(420);
+            var repeatDismissed=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(
+                "document.getElementById('recommendationNotice').hidden"));
+            if(!(repeatDismissed is bool)||!(bool)repeatDismissed)
+                throw new InvalidOperationException("Second-click warning did not auto-dismiss.");
+            Console.WriteLine("WEBVIEW RECOMMEND SIGNAL PASS: 18-star success burst/no modal, 1.5-second duplicate panel and fade, no public votes.");
+            hubEditorQaEnabled=true;
+            await hubWeb.ExecuteScriptAsync("UiLab.setHiddenCampaignIds([]);HangarFeatures.beginEdit(null)");
+            for(int i=0;i<50&&(hubEditorWeb==null||!hubEditorReady);i++)await Task.Delay(100);
+            if(hubEditorWindow==null||hubEditorWeb==null||!hubEditorReady)
+                throw new InvalidOperationException("Separate custom editor did not open.");
+            if(hubEditorWindow.FormBorderStyle!=FormBorderStyle.Sizable ||
+               !hubEditorWindow.MaximizeBox||hubEditorWindow.ClientSize.Width<700)
+                throw new InvalidOperationException("Custom editor does not permit horizontal resizing.");
+            hubEditorWindow.ClientSize=new Size(560,760);
+            bool stacked=false;
+            for(int i=0;i<22&&!stacked;i++){
+                await Task.Delay(90);
+                stacked=Convert.ToBoolean(Data.Json.DeserializeObject(await hubEditorWeb.ExecuteScriptAsync(@"(function(){
+                  var a=document.querySelector('.layout-editor-section--geometry').getBoundingClientRect();
+                  var b=document.querySelector('.layout-editor-section--colors').getBoundingClientRect();
+                  return Math.abs(a.left-b.left)<5 && b.top>a.top+40 &&
+                    document.documentElement.scrollWidth<=document.documentElement.clientWidth+3;
+                })()")));
+            }
+            if(!stacked)throw new InvalidOperationException("Narrow custom editor did not use a one-column layout without horizontal overflow.");
+            double initialCssWidth=Convert.ToDouble(Data.Json.DeserializeObject(await hubEditorWeb.ExecuteScriptAsync(
+                "document.getElementById('editorContent').getBoundingClientRect().width")));
+            hubEditorWindow.ClientSize=new Size(1040,800);
+            bool medium=false;
+            for(int i=0;i<30&&!medium;i++){
+                await Task.Delay(100);
+                medium=Convert.ToBoolean(Data.Json.DeserializeObject(await hubEditorWeb.ExecuteScriptAsync(
+                    "document.getElementById('editorContent').getBoundingClientRect().width>"+
+                    (initialCssWidth+85).ToString(System.Globalization.CultureInfo.InvariantCulture)+"&&"+
+                    "!!document.querySelector('[data-edit-action=library-save]')&&"+
+                    "!!document.querySelector('[data-edit-action=library-import]')&&"+
+                    "!!document.querySelector('[data-edit-action=library-export]')&&"+
+                    "(function(){var g=document.querySelector('.layout-editor-section--geometry').getBoundingClientRect();"+
+                    "var c=document.querySelector('.layout-editor-section--colors').getBoundingClientRect();"+
+                    "var v=[...document.querySelectorAll('.layout-editor-choices>label')].map(x=>x.getBoundingClientRect());"+
+                    "return v.length===4 && v.every(x=>Math.abs(x.top-v[0].top)<6)&&"+
+                    "c.top>g.top+50 && document.documentElement.scrollWidth<=document.documentElement.clientWidth+3;})()")));
+            }
+            if(!medium)
+            {
+                var mediumDiag=Data.Json.Deserialize<string>(await hubEditorWeb.ExecuteScriptAsync(@"JSON.stringify((function(){
+                    var choices=[...document.querySelectorAll('.layout-editor-choices>label')];
+                    return {windowWidth:innerWidth,dashboard:document.querySelector('.layout-editor-dashboard').getBoundingClientRect().width,
+                        choiceCount:choices.length,choicePositions:choices.map(x=>Math.round(x.getBoundingClientRect().top)),
+                        grid:getComputedStyle(document.querySelector('.layout-editor-choices')).gridTemplateColumns,
+                        horizontalOverflow:document.documentElement.scrollWidth-document.documentElement.clientWidth};
+                })())"));
+                throw new InvalidOperationException("Medium editor failed to align four base selectors in one row: "+mediumDiag);
+            }
+            hubEditorWindow.ClientSize=new Size(1580,900);
+            bool wide=false;
+            for(int i=0;i<35&&!wide;i++){
+                await Task.Delay(100);
+                wide=Convert.ToBoolean(Data.Json.DeserializeObject(await hubEditorWeb.ExecuteScriptAsync(@"(function(){
+                    var choices=[...document.querySelectorAll('.layout-editor-choices>label')].map(x=>x.getBoundingClientRect());
+                    var metrics=[...document.querySelectorAll('.layout-editor-metrics>label')].map(x=>x.getBoundingClientRect());
+                    var panel=document.querySelector('.layout-color-group--panel').getBoundingClientRect();
+                    var surfaces=document.querySelector('.layout-color-group--surfaces').getBoundingClientRect();
+                    if(choices.length!==4||metrics.length!==8)return false;
+                    var choicesSingleRow=choices.every(x=>Math.abs(x.top-choices[0].top)<6);
+                    var metrics4x2=metrics.slice(0,4).every(x=>Math.abs(x.top-metrics[0].top)<6)&&
+                      metrics.slice(4).every(x=>Math.abs(x.top-metrics[4].top)<6)&&
+                      metrics[4].top>metrics[0].top+35 && metrics[1].left>metrics[0].left+20;
+                    var colorsSideBySide=surfaces.left>=panel.right-6&&Math.abs(surfaces.top-panel.top)<8;
+                    return choicesSingleRow&&metrics4x2&&colorsSideBySide&&
+                      document.documentElement.scrollWidth<=document.documentElement.clientWidth+3;
+                })()")));
+            }
+            var editorDiag=Data.Json.Deserialize<string>(await hubEditorWeb.ExecuteScriptAsync(
+                "JSON.stringify({width:document.getElementById('editorContent').getBoundingClientRect().width,"+
+                "windowWidth:innerWidth,choices:document.querySelectorAll('.layout-editor-choices>label').length,"+
+                "metrics:document.querySelectorAll('.layout-editor-metrics>label').length,"+
+                "containerWidth:document.querySelector('.layout-editor-dashboard').getBoundingClientRect().width,"+
+                "scrollWidth:document.documentElement.scrollWidth})"));
+            if(!wide)throw new InvalidOperationException("Widened editor did not render 4 top choices, 4x2 sliders, side-by-side colors: "+editorDiag);
+            Console.WriteLine("WEBVIEW GROUP GRID PASS: 4 selectors in one row, 8 sliders in 4x2, panel colors left of menu/list/detail, no horizontal overflow.");
+            using(var screenshot=File.Create(Path.Combine(output,"custom-ui-library-wide.png")))
+                await hubEditorWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,screenshot);
+            await hubEditorWeb.ExecuteScriptAsync(@"(function(){
+                var name=document.querySelector('[data-preset-name]');
+                name.value='내 테스트 배치';name.dispatchEvent(new Event('input',{bubbles:true}));
+                document.querySelector('[data-edit-action=library-save]').click();
+                return true;
+            })()");
+            for(int i=0;i<40&&!File.Exists(hubPresetLibraryFile);i++)await Task.Delay(100);
+            if(!File.Exists(hubPresetLibraryFile))
+                throw new InvalidOperationException("Named preset did not reach native storage.");
+            var store=ReadHubPresetStore();
+            if(store.items.Count!=1||store.items[0].name!="내 테스트 배치"||store.items[0].shared)
+                throw new InvalidOperationException("First named preset was not retained correctly.");
+            var exchange=new HubCustomPresetExchange {
+                format="campaign-hangar-ui",version=1,name="공유한 전술 배치",theme="terran",
+                layout=CleanHubLayout(new HubUserLayout{menu="right",
+                    colors=new Dictionary<string,string>{{"accent","#a1b2c3"}}})
+            };
+            string file=Path.Combine(output,"share-fixture.chui.json");
+            WriteHubPresetShare(file,exchange);
+            var parsed=ReadHubPresetExchange(File.ReadAllText(file,Encoding.UTF8));
+            if(parsed.name!=exchange.name||parsed.theme!=exchange.theme||
+                parsed.layout.menu!="right"||parsed.layout.colors["accent"]!="#a1b2c3")
+                throw new InvalidOperationException("Exported UI exchange did not round-trip exact layout and colors.");
+            var imported=await ImportHubCustomPresetFile(file);
+            store=ReadHubPresetStore();
+            if(!imported.shared||store.items.Count!=2||
+                !store.items.Any(x=>x.id==imported.id&&x.shared))
+                throw new InvalidOperationException("Imported design was not saved alongside the user's own design.");
+            var applied=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(
+                "(function(){var p=HangarFeatures.getProfiles().terran.layout;return "+
+                "p.menu==='right'&&p.colors.accent==='#a1b2c3'&&"+
+                "HangarFeatures.getPresetLibrary().length===2&&"+
+                "document.getElementById('layoutEditor').querySelectorAll('.layout-library-item').length===2;})()"));
+            if(!(applied is bool)||!(bool)applied)
+                throw new InvalidOperationException("Imported design did not immediately apply and appear in the library.");
+            if(!File.Exists(hubLayoutFile) ||
+                CleanHubProfiles(File.ReadAllText(hubLayoutFile,Encoding.UTF8))["terran"].layout.menu!="right")
+                throw new InvalidOperationException("Immediate import did not persist the active custom layout.");
+            string invalid=Path.Combine(output,"invalid-share.chui.json");
+            File.WriteAllText(invalid,"{\"format\":\"wrong\",\"version\":1,\"name\":\"bad\"}",Encoding.UTF8);
+            bool rejected=false;
+            try{await ImportHubCustomPresetFile(invalid);}
+            catch(InvalidDataException){rejected=true;}
+            if(!rejected||ReadHubPresetStore().items.Count!=2)
+                throw new InvalidOperationException("Invalid shared UI file modified the preset storage.");
+            // Populate only the in-memory fixture with 13 example designs.
+            // The real profile store remains the two verified saved presets.
+            await hubWeb.ExecuteScriptAsync(@"(function(){
+                var original=HangarFeatures.getPresetLibrary();
+                var examples=Array.from({length:13},function(_,i){
+                    return {id:(i+1).toString(16).padStart(32,'0'),name:'격리 디자인 '+(i+1),
+                        theme:'terran',layout:original[0].layout,shared:i%2===0,
+                        created:'2026-11-15T00:00:00Z'};
+                });
+                return HangarFeatures.setPresetLibrary(examples);
+            })()");
+            bool multiple=false;
+            for(int i=0;i<30&&!multiple;i++)
+            {
+                await Task.Delay(100);
+                multiple=Convert.ToBoolean(Data.Json.DeserializeObject(await hubEditorWeb.ExecuteScriptAsync(@"(function(){
+                    var cards=[...document.querySelectorAll('.layout-library-item')].map(x=>x.getBoundingClientRect());
+                    var pager=document.querySelector('.layout-library-pages');
+                    var available=document.querySelector('.layout-editor-dashboard').getBoundingClientRect().width;
+                    var expected=available>=1260?4:available>=850?3:0;
+                    var columns=getComputedStyle(document.querySelector('.layout-library-list'))
+                        .gridTemplateColumns.split(/\s+/).filter(Boolean).length;
+                    return expected>=3 && columns===expected && cards.length===12 &&
+                        pager && pager.textContent.includes('1 / 2') &&
+                        cards.slice(0,columns).every(function(c){return Math.abs(c.top-cards[0].top)<7;}) &&
+                        cards.slice(0,columns-1).every(function(c,i){return cards[i+1].left>c.right-5;}) &&
+                        cards[columns].top>cards[0].top+35 &&
+                        document.documentElement.scrollWidth<=document.documentElement.clientWidth+3;
+                })()")));
+            }
+            if(!multiple)
+            {
+                var layoutDiag=Data.Json.Deserialize<string>(await hubEditorWeb.ExecuteScriptAsync(@"JSON.stringify((function(){
+                    var box=document.querySelector('.layout-library-list');
+                    var cards=[...document.querySelectorAll('.layout-library-item')];
+                    return {width:box.getBoundingClientRect().width,
+                        columns:getComputedStyle(box).gridTemplateColumns,
+                        count:cards.length,
+                        pager:document.querySelector('.layout-library-pages')&&document.querySelector('.layout-library-pages').textContent,
+                        cards:cards.slice(0,5).map(x=>({x:Math.round(x.getBoundingClientRect().left),
+                            y:Math.round(x.getBoundingClientRect().top),
+                            w:Math.round(x.getBoundingClientRect().width)})),
+                        overflow:document.documentElement.scrollWidth-document.documentElement.clientWidth};
+                })())"));
+                throw new InvalidOperationException("Custom design library did not match its responsive 3/4 columns and pagination: "+layoutDiag);
+            }
+            await hubWeb.ExecuteScriptAsync("HangarFeatures.editorCommand({action:'button',value:'library-next'})");
+            await Task.Delay(150);
+            var nextPage=Data.Json.DeserializeObject(await hubEditorWeb.ExecuteScriptAsync(
+                "document.querySelectorAll('.layout-library-item').length===1 &&"+
+                "document.querySelector('.layout-library-pages').textContent.includes('2 / 2')"));
+            if(!(nextPage is bool)||!(bool)nextPage)
+                throw new InvalidOperationException("Preset library pagination did not show the thirteenth item.");
+            await PushHubPresetLibrary();
+            Console.WriteLine("WEBVIEW DESIGN LIBRARY PASS: responsive 3/4 columns, 12 visible items, next page, original saved data restored.");
+            await hubWeb.ExecuteScriptAsync("HangarFeatures.editorCommand({action:'button',value:'apply'})");
+            for(int i=0;i<40&&hubEditorWindow!=null;i++)await Task.Delay(100);
+            if(hubEditorWindow!=null)throw new InvalidOperationException("External editor did not close after saving.");
+            hubEditorQaEnabled=false;
+            Console.WriteLine("WEBVIEW UI PRESET PASS: native save, JSON export/import, immediate apply, two stored designs, rejection, wide editor.");
         }
 
         // This runs only from --ui-hub-scroll-check with a temporary,
@@ -624,16 +1043,29 @@ namespace CampaignHangar
             hubProgressSequence = 10006;
             var realProgress = RunWork("QA ZIP 진행 이벤트", reporter => {
                 reporter(new WorkProgress("실측 바이트 복사 중",1024*1024,4*1024*1024,true));
-                System.Threading.Thread.Sleep(550);
+                System.Threading.Thread.Sleep(1900);
                 return true;
             });
-            await Task.Delay(235);
-            var nativeProgress = Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(
-                "(function(){return !document.getElementById('boot').classList.contains('is-hidden')&&"+
-                "document.getElementById('bootPercent').textContent==='25%'&&"+
-                "document.getElementById('bootStep').textContent.indexOf('실측 바이트')>=0;})()"));
-            if (!(nativeProgress is bool) || !(bool)nativeProgress)
-                throw new InvalidOperationException("Native WorkProgress did not reach themed fullscreen loader.");
+            bool nativeReached=false;
+            for(int attempt=0;attempt<14;attempt++)
+            {
+                await Task.Delay(100);
+                var nativeProgress=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(
+                    "(function(){return !document.getElementById('boot').classList.contains('is-hidden')&&"+
+                    "document.getElementById('bootPercent').textContent==='25%'&&"+
+                    "document.getElementById('bootStep').textContent.indexOf('실측 바이트')>=0;})()"));
+                nativeReached=nativeProgress is bool&&(bool)nativeProgress;
+                if(nativeReached)break;
+            }
+            if(!nativeReached)
+            {
+                var uiState=await hubWeb.ExecuteScriptAsync(
+                    "(function(){return JSON.stringify({className:document.getElementById('boot').className,"+
+                    "percent:document.getElementById('bootPercent').textContent,"+
+                    "stage:document.getElementById('bootStep').textContent});})()");
+                await realProgress;
+                throw new InvalidOperationException("Native WorkProgress did not reach themed fullscreen loader. Actual: "+uiState);
+            }
             using(var image=File.Create(Path.Combine(output,"work-native-progress.png")))
                 await hubWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,image);
             await realProgress;
@@ -1851,6 +2283,8 @@ namespace CampaignHangar
             hubProfileRoot = profileRoot;
             hubFavoritesFile = Path.Combine(profileRoot, "ui-hub-favorites.json");
             hubLayoutFile = Path.Combine(profileRoot, "ui-hub-layouts.json");
+            hubHiddenCampaignsFile = Path.Combine(profileRoot, "ui-hub-hidden-campaigns.json");
+            hubPresetLibraryFile = Path.Combine(profileRoot, "ui-hub-custom-presets.json");
             homePage.BackColor = GlassTheme.Background;
             homePage.Dock = DockStyle.Fill;
             homePage.Margin = Padding.Empty;
@@ -1860,7 +2294,11 @@ namespace CampaignHangar
                     hubWeb.ExecuteScriptAsync("window.HangarFeatures.editorCommand({action:'close'})");
                 }
             };
-            FormClosed += delegate { CloseHubEditor();CloseHubWorkWindow(); };
+            FormClosed += delegate {
+                CloseHubEditor(); CloseHubWorkWindow();
+                if (hubArchiveWindow != null && !hubArchiveWindow.IsDisposed)
+                { hubArchiveWindow.Hide(); hubArchiveWindow.Close(); }
+            };
             hubWeb = new WebView2 { Dock = DockStyle.Fill, Visible = false,
                 AllowExternalDrop = true,
                 DefaultBackgroundColor = GlassTheme.Background };
@@ -1887,15 +2325,86 @@ namespace CampaignHangar
             hubArchiveWindow.Controls.Add(hubEmbeddedArchive);
             LocationChanged += delegate { PositionHubArchiveWindow(); };
             SizeChanged += delegate { PositionHubArchiveWindow(); };
-            FormClosing += delegate {
-                if (hubArchiveWindow != null && !hubArchiveWindow.IsDisposed)
-                { hubArchiveWindow.Hide(); hubArchiveWindow.Close(); }
-            };
+            // Never dispose this owned window in FormClosing: another handler
+            // may still cancel a close (notably while an update is busy).
+        }
+        void BeginHubShutdown()
+        {
+            if (hubShuttingDown) return;
+            hubShuttingDown = true;
+            hubArchiveRequestedVisible = false;
+            hubLastArchiveRect = null;
+            hubPendingArchiveId = null;
+            hubPendingArchiveReviews = false;
+            if (hubWeb != null && !hubWeb.IsDisposed)
+            {
+                try
+                {
+                    if (hubWeb.CoreWebView2 != null)
+                        hubWeb.CoreWebView2.WebMessageReceived -= LiveHubMessage;
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+            }
+        }
+        bool HubArchiveAlive(Control hosted)
+        {
+            return !hubShuttingDown && !IsDisposed && !Disposing &&
+                archiveView != null && !archiveView.IsDisposed && !archiveView.Disposing &&
+                distributionView != null && !distributionView.IsDisposed && !distributionView.Disposing &&
+                hubWeb != null && !hubWeb.IsDisposed && !hubWeb.Disposing &&
+                hubEmbeddedArchive != null && !hubEmbeddedArchive.IsDisposed && !hubEmbeddedArchive.Disposing &&
+                hubArchiveWindow != null && !hubArchiveWindow.IsDisposed && !hubArchiveWindow.Disposing &&
+                (hosted == null || (!hosted.IsDisposed && !hosted.Disposing));
+        }
+        internal void VerifyUpdateCloseLifecycle()
+        {
+            if (!isolated || online || !AppChannel.HasThemedUi || hubArchiveWindow == null)
+                throw new InvalidOperationException("Update-close lifecycle test requires an offline isolated themed app.");
+            if (LiveTheme.Current == LiveTheme.Classic)
+                LiveTheme.Select(LiveTheme.Resolve("terran"));
+            ShowPage(homePage);
+            SetBusy(true); // The updater has not acknowledged readiness yet.
+            appUpdateInProgress = true;
+            try
+            {
+                Close();
+                if (IsDisposed || hubArchiveWindow.IsDisposed || hubShuttingDown)
+                    throw new InvalidOperationException("A canceled busy close must keep the archive host and app alive.");
+                Console.WriteLine("UPDATE LIFECYCLE PASS: busy close was canceled without disposing archive host.");
+
+                var rect = new HubEmbeddedRect { x = 12, y = 20, width = 500, height = 380,
+                    viewWidth = 1280, viewHeight = 720 };
+                // Simulate the exact stale ArchiveView observed in the 7393
+                // WinForms stack trace, without downloading anything or
+                // touching the user's real browser profile.
+                archiveView.Dispose();
+                ShowHubEmbeddedArchive(rect);
+                if (hubArchiveRequestedVisible)
+                    throw new InvalidOperationException("A disposed ArchiveView was re-shown by a stale rectangle.");
+                Console.WriteLine("UPDATE LIFECYCLE PASS: disposed ArchiveView ignores late archive-rect messages.");
+
+                appUpdateExitApproved = true; // Updater ready-file received.
+                Close();
+                if (!IsDisposed || !hubShuttingDown)
+                    throw new InvalidOperationException("Updater-ready close must terminate the old busy app.");
+                ShowHubEmbeddedArchive(rect);
+                Console.WriteLine("UPDATE LIFECYCLE PASS: updater-ready close exited; post-close archive messages ignored.");
+            }
+            finally
+            {
+                if (!IsDisposed)
+                {
+                    appUpdateExitApproved = false;
+                    appUpdateInProgress = false;
+                    SetBusy(false);
+                }
+            }
         }
 
         void PositionHubArchiveWindow()
         {
-            if (hubArchiveWindow == null || hubArchiveWindow.IsDisposed ||
+            if (!HubArchiveAlive(null) ||
                 hubLastArchiveRect == null || hubWeb == null ||
                 hubWeb.IsDisposed || homePage.IsDisposed || !homePage.IsHandleCreated) return;
             if (hubArchiveSuspendedByIntro || WindowState == FormWindowState.Minimized ||
@@ -1919,7 +2428,7 @@ namespace CampaignHangar
         // Ratios account for Windows DPI independently of WebView2 CSS pixels.
         async void ShowHubEmbeddedArchive(HubEmbeddedRect rect)
         {
-            if (hubWeb == null || hubEmbeddedArchive == null || IsDisposed ||
+            if (!HubArchiveAlive(null) ||
                 LiveTheme.Current == LiveTheme.Classic || currentPage != homePage ||
                 rect == null || rect.viewWidth < 100 || rect.viewHeight < 100 ||
                 rect.width < 120 || rect.height < 120 || rect.width > 30000 ||
@@ -1929,6 +2438,9 @@ namespace CampaignHangar
             // intro has begun. Never re-show the owned website in that period.
             if (hubArchiveSuspendedByIntro) return;
             Control hosted = hubDistributionActive ? (Control)distributionView : archiveView;
+            if (!HubArchiveAlive(hosted)) return;
+            try
+            {
             if (hosted.Parent != hubEmbeddedArchive)
             {
                 if (hosted.Parent != null) hosted.Parent.Controls.Remove(hosted);
@@ -1948,34 +2460,35 @@ namespace CampaignHangar
             {
                 hubArchiveOpenRequested = true;
                 try { await archiveView.OpenAsync(); }
-                catch (Exception e) { status.Text = "아카이브 연결 실패 · " + e.Message; }
+                catch (Exception e) { if (HubArchiveAlive(null)) status.Text = "아카이브 연결 실패 · " + e.Message; }
             }
+            if (!HubArchiveAlive(null)) return;
             if (!String.IsNullOrWhiteSpace(hubPendingArchiveId))
             {
                 string id = hubPendingArchiveId; hubPendingArchiveId = null;
+                bool openReviews = hubPendingArchiveReviews;hubPendingArchiveReviews=false;
                 var item = FindLiveEntry(id);
                 if (item != null)
                 {
                     try
                     {
-                        // A local installation often has a different ID from
-                        // its archive catalogue article. Never fabricate a
-                        // detail link using the installation ID.
-                        string siteId=null;
-                        try { siteId=library.CatalogueId(item.id); }
-                        catch (Exception error) { System.Diagnostics.Trace.WriteLine("Hub detail mapping: "+error.Message); }
-                        var site=catalogue.FirstOrDefault(c => c!=null &&
-                            (String.Equals(c.id,siteId,StringComparison.OrdinalIgnoreCase) ||
-                             String.Equals(c.id,item.id,StringComparison.OrdinalIgnoreCase)));
-                        if (site!=null) await archiveView.OpenCampaignAsync(site);
+                        var site=ResolveHubSiteCampaign(item);
+                        if (site!=null) await archiveView.OpenCampaignAsync(site,openReviews);
                         else
                         {
                             archiveView.HomeFromHub();
                             status.Text=item.name+" · 연결된 아카이브 상세 페이지가 없습니다. 설치·관리에서 사이트 캠페인을 연결해 주세요.";
                         }
                     }
-                    catch (Exception e) { status.Text = "캠페인 상세 페이지 연결 실패 · " + e.Message; }
+                    catch (Exception e) { if (HubArchiveAlive(null)) status.Text = "캠페인 상세 페이지 연결 실패 · " + e.Message; }
                 }
+            }
+            }
+            catch (ObjectDisposedException)
+            {
+                // A late WebView2 rectangle is not an instruction to recreate
+                // an ArchiveView already disposed during the update handoff.
+                if (HubArchiveAlive(null)) status.Text = "아카이브 화면이 종료되어 다시 표시하지 않았습니다.";
             }
         }
         void HideHubEmbeddedArchive()
@@ -2055,7 +2568,8 @@ namespace CampaignHangar
             };
             foreach (var id in new[]{"detail","wol","hots","lotv","nova","dedicated"})
                 minimum["contact-"+id] = new[]{1,1};
-            foreach(var id in new[]{"launchButton","installButton","detailButton","screenshotButton","importZipButton"})
+            foreach(var id in new[]{"launchButton","installButton","detailButton","screenshotButton",
+                "reviewButton","recommendButton","importZipButton"})
                 minimum[id]=new[]{90,40};
             var clean = new Dictionary<string,HubFreePanelRect>();
             foreach (var item in minimum)
@@ -2070,6 +2584,30 @@ namespace CampaignHangar
                 };
             }
             return clean;
+        }
+        static string[] CleanHubActions(string[] source)
+        {
+            var supplied=(source??new string[0])
+                .Select(id=>id=="favoriteButton"?"screenshotButton":id).ToArray();
+            var order=HubOrder(supplied,new[] {"launchButton","installButton",
+                "detailButton","screenshotButton","reviewButton","recommendButton",
+                "importZipButton"}).ToList();
+            // When pre-existing custom layouts contain only five buttons, the
+            // newly added review/recommend actions were appended after ZIP.
+            // Place just those additions immediately before ZIP; preserve the
+            // owner's ordering for every older action.
+            bool missing=supplied.All(x=>x!="reviewButton")||
+                supplied.All(x=>x!="recommendButton");
+            bool oldTail=order.Count>=3&&order[order.Count-3]=="importZipButton"&&
+                order[order.Count-2]=="reviewButton"&&order[order.Count-1]=="recommendButton";
+            if(missing||oldTail)
+            {
+                order.Remove("reviewButton");order.Remove("recommendButton");
+                int insert=order.IndexOf("importZipButton");
+                order.Insert(insert,"reviewButton");
+                order.Insert(insert+1,"recommendButton");
+            }
+            return order.ToArray();
         }
         static HubUserLayout CleanHubLayout(HubUserLayout source)
         {
@@ -2107,7 +2645,7 @@ namespace CampaignHangar
             }
             var elements=new[]{"header","hero","actions","toolbar","list","detail","contact-detail","contact-wol",
                 "contact-hots","contact-lotv","contact-nova","contact-dedicated","launchButton","installButton",
-                "detailButton","screenshotButton","importZipButton"};
+                "detailButton","screenshotButton","reviewButton","recommendButton","importZipButton"};
             return new HubUserLayout {
                 menu = menu,
                 detail = HubAllowed(source.detail,"right","left","hidden") ? source.detail : "right",
@@ -2123,8 +2661,7 @@ namespace CampaignHangar
                 hiddenCampaigns = (source.hiddenCampaigns ?? new string[0]).Where(k =>
                     new[] {"all","wol","hots","lotv","nova","dedicated"}.Contains(k))
                     .Distinct(StringComparer.Ordinal).ToArray(),
-                actions = HubOrder((source.actions??new string[0]).Select(id=>id=="favoriteButton"?"screenshotButton":id).ToArray(),
-                    new[] {"launchButton","installButton","detailButton","screenshotButton","importZipButton"}),
+                actions = CleanHubActions(source.actions),
                 navGap = HubBound(source.navGap ?? 5,0,18),
                 menuShape = HubAllowed(source.menuShape,"auto","terran","protoss","zerg","nova") ? source.menuShape : "auto",
                 presentation = HubAllowed(source.presentation,"base","focus","list","contact") ? source.presentation : "base",
@@ -2200,6 +2737,211 @@ namespace CampaignHangar
                     "window.HangarFeatures&&window.HangarFeatures.applyHostProfiles(" + json + ")");
             }
             catch (Exception e) { System.Diagnostics.Trace.WriteLine("Hub layouts load: " + e.Message); }
+        }
+        static string HubPresetName(string name)
+        {
+            name = (name ?? "").Trim();
+            if (name.Length < 1 || name.Length > 48 || name.Any(char.IsControl))
+                throw new InvalidDataException("디자인 이름은 1~48자로 입력해 주세요.");
+            return name;
+        }
+        static string HubPresetTheme(string id)
+        {
+            if (!HubAllowed(id,"terran","protoss","zerg","nova"))
+                throw new InvalidDataException("테란·프로토스·저그·노바 테마만 가져올 수 있습니다.");
+            return id;
+        }
+        static HubCustomPresetExchange ReadHubPresetExchange(string raw)
+        {
+            if (String.IsNullOrWhiteSpace(raw) || Encoding.UTF8.GetByteCount(raw) > 262144)
+                throw new InvalidDataException("커스텀 UI 파일이 비어 있거나 256KB를 초과했습니다.");
+            var input=Data.Json.Deserialize<HubCustomPresetExchange>(raw);
+            if (input==null || input.format!="campaign-hangar-ui" || input.version!=1 || input.layout==null)
+                throw new InvalidDataException("커캠 격납고 UI 공유 파일 형식(v1)이 아닙니다.");
+            return new HubCustomPresetExchange {
+                format="campaign-hangar-ui",version=1,
+                name=HubPresetName(input.name),theme=HubPresetTheme(input.theme),
+                layout=CleanHubLayout(input.layout)
+            };
+        }
+        HubCustomPresetStore ReadHubPresetStore()
+        {
+            var store=File.Exists(hubPresetLibraryFile)
+                ? Data.Json.Deserialize<HubCustomPresetStore>(File.ReadAllText(hubPresetLibraryFile,Encoding.UTF8))
+                : new HubCustomPresetStore { schema=1,items=new List<HubCustomPreset>() };
+            if (store==null || store.schema!=1 || store.items==null || store.items.Count>64)
+                throw new InvalidDataException("커스텀 UI 보관함 구조가 올바르지 않습니다.");
+            var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach(var item in store.items)
+            {
+                Guid id;
+                if(item==null || !Guid.TryParse(item.id,out id) || !seen.Add(item.id) ||
+                    item.layout==null || item.created==null || item.created.Length>80)
+                    throw new InvalidDataException("커스텀 UI 보관함 항목이 손상됐습니다.");
+                item.name=HubPresetName(item.name);
+                item.theme=HubPresetTheme(item.theme);
+                item.layout=CleanHubLayout(item.layout);
+            }
+            return store;
+        }
+        void SaveHubPresetStore(HubCustomPresetStore store)
+        {
+            if(store.items.Count>64)throw new InvalidOperationException("디자인은 최대 64개까지 보관할 수 있습니다.");
+            Directory.CreateDirectory(Path.GetDirectoryName(hubPresetLibraryFile));
+            string temp=hubPresetLibraryFile+".new-"+Guid.NewGuid().ToString("N");
+            try
+            {
+                File.WriteAllText(temp,Data.Json.Serialize(store),new UTF8Encoding(false));
+                if(File.Exists(hubPresetLibraryFile))
+                    File.Replace(temp,hubPresetLibraryFile,
+                        hubPresetLibraryFile+".backup-"+Guid.NewGuid().ToString("N"),true);
+                else File.Move(temp,hubPresetLibraryFile);
+            }
+            finally {if(File.Exists(temp))File.Delete(temp);}
+        }
+        async Task PushHubPresetLibrary()
+        {
+            if(hubWeb==null || hubWeb.IsDisposed || hubWeb.CoreWebView2==null)return;
+            try {
+                var items=ReadHubPresetStore().items;
+                await hubWeb.ExecuteScriptAsync("window.HangarFeatures&&window.HangarFeatures.setPresetLibrary("+
+                    Data.Json.Serialize(items)+")");
+            }
+            catch(Exception error){status.Text="커스텀 UI 보관함 읽기 실패 · "+error.Message;}
+        }
+        async Task HubPresetFeedback(string message)
+        {
+            status.Text=message;
+            if(hubWeb==null || hubWeb.IsDisposed || hubWeb.CoreWebView2==null)return;
+            try{await hubWeb.ExecuteScriptAsync("window.HangarFeatures&&window.HangarFeatures.presetFeedback("+
+                Data.Json.Serialize(message)+")");}
+            catch(Exception error){System.Diagnostics.Trace.WriteLine("Preset feedback: "+error.Message);}
+        }
+        IWin32Window HubPresetDialogOwner()
+        {
+            return hubEditorWindow!=null&&!hubEditorWindow.IsDisposed?(IWin32Window)hubEditorWindow:this;
+        }
+        async Task SaveHubCustomPreset(string raw)
+        {
+            try
+            {
+                var candidate=ReadHubPresetExchange(raw);
+                var store=ReadHubPresetStore();
+                if(store.items.Count>=64)throw new InvalidOperationException("보관함이 가득 찼습니다. 사용하지 않는 디자인을 삭제해 주세요.");
+                var item=new HubCustomPreset { id=Guid.NewGuid().ToString("N"),
+                    name=candidate.name,theme=candidate.theme,layout=candidate.layout,
+                    created=DateTimeOffset.UtcNow.ToString("o"),shared=false };
+                store.items.Insert(0,item);
+                SaveHubPresetStore(store);
+                await PushHubPresetLibrary();
+                await HubPresetFeedback("디자인 ‘"+item.name+"’을 보관함에 저장했습니다.");
+            }
+            catch(Exception error){HubPresetFeedback("디자인 저장 실패 · "+error.Message);}
+        }
+        static string HubPresetFileName(string name)
+        {
+            var invalid=Path.GetInvalidFileNameChars();
+            string cleaned=new string(name.Where(c=>!invalid.Contains(c)&&!char.IsControl(c)).ToArray()).Trim();
+            if(cleaned.Length>48)cleaned=cleaned.Substring(0,48);
+            return String.IsNullOrWhiteSpace(cleaned)?"CampaignHangar-UI":cleaned;
+        }
+        static void WriteHubPresetShare(string path, HubCustomPresetExchange candidate)
+        {
+            if(String.IsNullOrWhiteSpace(path)||candidate==null)
+                throw new InvalidDataException("내보낼 파일과 디자인을 확인할 수 없습니다.");
+            var validated=ReadHubPresetExchange(Data.Json.Serialize(candidate));
+            File.WriteAllText(path,Data.Json.Serialize(validated),new UTF8Encoding(false));
+        }
+        async Task ExportHubCustomPreset(string raw)
+        {
+            try
+            {
+                var candidate=ReadHubPresetExchange(raw);
+                using(var dialog=new SaveFileDialog {
+                    Title="커스텀 UI 내보내기",Filter="커캠 격납고 UI (*.chui.json)|*.chui.json|JSON 파일 (*.json)|*.json",
+                    FileName=HubPresetFileName(candidate.name)+".chui.json",AddExtension=true,OverwritePrompt=true
+                })
+                {
+                    if(dialog.ShowDialog(HubPresetDialogOwner())!=DialogResult.OK)return;
+                    WriteHubPresetShare(dialog.FileName,candidate);
+                }
+                await HubPresetFeedback("커스텀 UI 공유 파일을 내보냈습니다.");
+            }
+            catch(Exception error){HubPresetFeedback("UI 내보내기 실패 · "+error.Message);}
+        }
+        async Task ImportHubCustomPreset()
+        {
+            try
+            {
+                string path;
+                using(var dialog=new OpenFileDialog {
+                    Title="공유받은 커스텀 UI 불러오기",
+                    Filter="커캠 격납고 UI (*.chui.json)|*.chui.json|JSON 파일 (*.json)|*.json",
+                    CheckFileExists=true,Multiselect=false
+                })
+                {
+                    if(dialog.ShowDialog(HubPresetDialogOwner())!=DialogResult.OK)return;
+                    path=dialog.FileName;
+                }
+                await ImportHubCustomPresetFile(path);
+            }
+            catch(Exception error){HubPresetFeedback("UI 불러오기 실패 · "+error.Message);}
+        }
+        async Task<HubCustomPreset> ImportHubCustomPresetFile(string path)
+        {
+            var file=new FileInfo(path);
+            if(file.Length>262144 || file.Length==0)
+                throw new InvalidDataException("커스텀 UI 파일은 256KB 이하여야 합니다.");
+            var candidate=ReadHubPresetExchange(File.ReadAllText(file.FullName,Encoding.UTF8));
+            var store=ReadHubPresetStore();
+            if(store.items.Count>=64)throw new InvalidOperationException("보관함이 가득 찼습니다.");
+            var item=new HubCustomPreset {id=Guid.NewGuid().ToString("N"),
+                name=candidate.name,theme=candidate.theme,layout=candidate.layout,
+                created=DateTimeOffset.UtcNow.ToString("o"),shared=true};
+            store.items.Insert(0,item);
+            SaveHubPresetStore(store);
+            // A shared file is data only: the sanitized layout has no OS path,
+            // executable, campaign ID, account, or personal play-record fields.
+            await PushHubPresetLibrary();
+            if(hubWeb!=null&&!hubWeb.IsDisposed&&hubWeb.CoreWebView2!=null)
+            {
+                var applied=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(
+                    "window.HangarFeatures&&window.HangarFeatures.applyImportedPreset("+
+                    Data.Json.Serialize(item)+")"));
+                if(!(applied is bool) || !(bool)applied)
+                    throw new InvalidOperationException("공유 디자인을 보관했지만 화면에 적용하지 못했습니다.");
+            }
+            await HubPresetFeedback("공유 디자인 ‘"+item.name+"’을 보관하고 현재 화면에 적용했습니다.");
+            return item;
+        }
+        async Task ExportStoredHubPreset(string id)
+        {
+            try
+            {
+                var entry=ReadHubPresetStore().items.SingleOrDefault(x=>x.id==id);
+                if(entry==null)throw new InvalidDataException("내보낼 디자인을 찾지 못했습니다.");
+                await ExportHubCustomPreset(Data.Json.Serialize(new HubCustomPresetExchange {
+                    format="campaign-hangar-ui",version=1,name=entry.name,theme=entry.theme,layout=entry.layout
+                }));
+            }
+            catch(Exception error){HubPresetFeedback("보관 디자인 내보내기 실패 · "+error.Message);}
+        }
+        async Task DeleteStoredHubPreset(string id)
+        {
+            try
+            {
+                var store=ReadHubPresetStore();
+                var item=store.items.SingleOrDefault(x=>x.id==id);
+                if(item==null)throw new InvalidDataException("보관 디자인을 찾지 못했습니다.");
+                if(!AppDialog.Confirm(HubPresetDialogOwner(),
+                    "‘"+item.name+"’을 보관함에서 삭제하시겠습니까?\n현재 화면에 적용한 디자인은 유지됩니다.",
+                    "커스텀 UI 보관함","보관함에서 삭제","취소"))return;
+                store.items.Remove(item);
+                SaveHubPresetStore(store);
+                await PushHubPresetLibrary();
+                await HubPresetFeedback("보관함에서 ‘"+item.name+"’을 삭제했습니다.");
+            }
+            catch(Exception error){HubPresetFeedback("보관 디자인 삭제 실패 · "+error.Message);}
         }
         async Task PushHubHostSettings()
         {
@@ -2588,6 +3330,14 @@ namespace CampaignHangar
                 catch (Exception e) { System.Diagnostics.Trace.WriteLine("Hub favorites read: " + e.Message); }
                 await hubWeb.ExecuteScriptAsync("window.UiLab.setFavoriteIds(" +
                     Data.Json.Serialize(favorite ?? new List<string>()) + ")");
+                List<string> hidden = new List<string>();
+                try {
+                    if(File.Exists(hubHiddenCampaignsFile))
+                        hidden = Data.Read<List<string>>(hubHiddenCampaignsFile) ?? new List<string>();
+                }
+                catch(Exception error){System.Diagnostics.Trace.WriteLine("Hub hidden list read: "+error.Message);}
+                await hubWeb.ExecuteScriptAsync("window.UiLab.setHiddenCampaignIds("+
+                    Data.Json.Serialize(hidden)+")");
                 await PushLiveHubPreferences();
                 await PushHubLayouts();
                 await PushHubHostSettings();
@@ -2718,15 +3468,66 @@ namespace CampaignHangar
             }
             catch (Exception error) { status.Text = "캠페인을 실행하지 못했습니다 · " + error.Message; }
         }
-        async void OpenHubArchiveDetail(string id)
+        Campaign ResolveHubSiteCampaign(Campaign item)
+        {
+            if(item==null)return null;
+            // Local installation IDs may differ from site article IDs.
+            // A recommendation/review must always target a verified site ID.
+            string siteId=null;
+            try { siteId=library.CatalogueId(item.id); }
+            catch(Exception error){System.Diagnostics.Trace.WriteLine("Hub site mapping: "+error.Message);}
+            // An explicitly linked but missing site article is not permission
+            // to vote for a different article with the same local install ID.
+            string targetId=String.IsNullOrWhiteSpace(siteId)?item.id:siteId;
+            return catalogue.FirstOrDefault(c=>c!=null &&
+                String.Equals(c.id,targetId,StringComparison.OrdinalIgnoreCase));
+        }
+        async void OpenHubArchiveDetail(string id, bool reviews=false)
         {
             if (FindLiveEntry(id) == null) return;
             hubPendingArchiveId = id;
+            hubPendingArchiveReviews = reviews;
             if (hubWeb != null && hubWeb.CoreWebView2 != null)
             {
                 await hubWeb.ExecuteScriptAsync("window.UiLab.setView('archive')");
                 if (hubLastArchiveRect != null) ShowHubEmbeddedArchive(hubLastArchiveRect);
             }
+        }
+        async Task RecommendHubCampaign(string id)
+        {
+            if(hubRecommendationInFlight)return;
+            hubRecommendationInFlight=true;
+            bool ok=false,duplicate=false;int? count=null;
+            string message="추천을 완료하지 못했습니다.";
+            try
+            {
+                var item=FindLiveEntry(id);
+                var site=ResolveHubSiteCampaign(item);
+                if(site==null)
+                    message="아카이브에 연결된 캠페인이 없습니다. 설치·관리에서 사이트 캠페인을 먼저 연결해 주세요.";
+                else if(site.kind=="resource")
+                    message="자료 항목은 추천할 수 없습니다.";
+                else
+                {
+                    var result=await archiveView.RecommendCampaignAsync(site.id);
+                    ok=result.ok;duplicate=result.duplicate;count=result.count;
+                    message=ok ? "‘"+site.name+"’ 추천이 등록됐습니다." :
+                        duplicate ? "각 캠페인당 하루 한 번만 추천 가능합니다." :
+                        (String.IsNullOrWhiteSpace(result.error)?"추천을 저장하지 못했습니다.":result.error);
+                }
+            }
+            catch(Exception error){message="추천 요청 실패 · "+error.Message;}
+            finally
+            {
+                hubRecommendationInFlight=false;
+            }
+            status.Text=message;
+            if(hubWeb!=null&&!hubWeb.IsDisposed&&hubWeb.CoreWebView2!=null)
+                try{await hubWeb.ExecuteScriptAsync("window.UiLab&&window.UiLab.recommendationResult("+
+                    Data.Json.Serialize(id)+","+(ok?"true":"false")+","+
+                    (count.HasValue?count.Value.ToString(System.Globalization.CultureInfo.InvariantCulture):"null")+","+
+                    Data.Json.Serialize(message)+","+(duplicate?"true":"false")+")");}
+                catch(Exception error){System.Diagnostics.Trace.WriteLine("Recommend UI result: "+error.Message);}
         }
         async void PerformHubManageAction(string action, string id)
         {
@@ -2915,6 +3716,7 @@ namespace CampaignHangar
         }
         async void LiveHubMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
+            if (hubShuttingDown || IsDisposed || Disposing || hubWeb == null || hubWeb.IsDisposed) return;
             // Only accept OS File objects from the local, host-owned game UI.
             // Arbitrary JS path strings must never become import targets.
             Uri source;
@@ -2981,8 +3783,22 @@ namespace CampaignHangar
             else if (command == "archive-external") archiveView.ExternalFromHub();
             else if (command.StartsWith("archive-detail:",StringComparison.Ordinal))
                 OpenHubArchiveDetail(command.Substring(15));
+            else if (command.StartsWith("review-campaign:",StringComparison.Ordinal))
+                OpenHubArchiveDetail(command.Substring("review-campaign:".Length),true);
+            else if (command.StartsWith("recommend-campaign:",StringComparison.Ordinal))
+                await RecommendHubCampaign(command.Substring("recommend-campaign:".Length));
             else if (command.StartsWith("layout-save:",StringComparison.Ordinal))
                 SaveHubLayouts(command.Substring(12));
+            else if (command=="preset-request") await PushHubPresetLibrary();
+            else if (command.StartsWith("preset-save:",StringComparison.Ordinal))
+                await SaveHubCustomPreset(command.Substring("preset-save:".Length));
+            else if (command.StartsWith("preset-export:",StringComparison.Ordinal))
+                await ExportHubCustomPreset(command.Substring("preset-export:".Length));
+            else if (command=="preset-import") await ImportHubCustomPreset();
+            else if (command.StartsWith("preset-export-stored:",StringComparison.Ordinal))
+                await ExportStoredHubPreset(command.Substring("preset-export-stored:".Length));
+            else if (command.StartsWith("preset-delete:",StringComparison.Ordinal))
+                await DeleteStoredHubPreset(command.Substring("preset-delete:".Length));
             else if (command == "editor-open") OpenHubEditor();
             else if (command == "editor-close") CloseHubEditor();
             else if (command.StartsWith("editor-state:",StringComparison.Ordinal))
@@ -3090,7 +3906,19 @@ namespace CampaignHangar
                 }
                 catch (Exception error) { status.Text = "작전실 즐겨찾기를 저장하지 못했습니다 · " + error.Message; }
             }
-            } catch(Exception error) { if(!IsDisposed)Error(error); }
+            else if (command.StartsWith("hidden-campaigns:",StringComparison.Ordinal))
+            {
+                try {
+                    var ids=Data.Json.Deserialize<List<string>>(command.Substring("hidden-campaigns:".Length));
+                    if(ids==null || ids.Count>512)throw new InvalidDataException("숨김 캠페인 목록이 너무 큽니다.");
+                    ids=ids.Where(id=>!String.IsNullOrWhiteSpace(id)&&id.Length<=128&&
+                        !id.Any(char.IsControl)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    Directory.CreateDirectory(Path.GetDirectoryName(hubHiddenCampaignsFile));
+                    Data.Write(hubHiddenCampaignsFile,ids);
+                }
+                catch(Exception error){ status.Text="숨김 캠페인 목록을 저장하지 못했습니다 · "+error.Message; }
+            }
+            } catch(Exception error) { if(!hubShuttingDown && !IsDisposed && !Disposing)Error(error); }
         }
         async void ReceiveLiveHubZipDrop(CoreWebView2WebMessageReceivedEventArgs e)
         {

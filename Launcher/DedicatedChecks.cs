@@ -359,12 +359,13 @@ namespace CampaignHangar
             Console.WriteLine("DEDICATED ONLINE COMPLETE: pinned public manifest hashes and original ZIP install/uninstall; no actual game execution or production game mutation.");
         }
         static byte[] Mpq(byte value) { return new byte[] { 77, 80, 81, 26, value, 2, 3, 4 }; }
-        static DedicatedRelease Package(string root, string id, byte map, byte shared, string version, out string zip)
+        static DedicatedRelease Package(string root, string id, byte map, byte shared, string version, out string zip,
+            string sharedPath = "Mods/Shared.SC2Mod")
         {
             zip = Path.Combine(root, id + "-" + Guid.NewGuid().ToString("N") + ".zip");
             string stage = Path.Combine(root, "fixture-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(stage);
             var files = new Dictionary<string, byte[]> {
-                { "Maps/" + id + "/Start.SC2Map", Mpq(map) }, { "Mods/Shared.SC2Mod", Mpq(shared) }
+                { "Maps/" + id + "/Start.SC2Map", Mpq(map) }, { sharedPath, Mpq(shared) }
             };
             var release = new DedicatedRelease { schema = 1, id = id, name = "한글 전용 캠페인 · 격리 예시", version = version,
                 files = new List<DedicatedFile>(), packages = new List<DedicatedBundle>(),
@@ -384,9 +385,11 @@ namespace CampaignHangar
             return release;
         }
         static void Install(DedicatedLibrary library, DedicatedRelease release, string zip, string game, Action<int> fault = null,
-            Func<DedicatedConflict, bool> confirmConflict = null)
+            Func<DedicatedConflict, bool> confirmConflict = null,
+            Func<IReadOnlyList<DedicatedConflict>, bool> confirmRemoval = null)
         {
-            library.InstallArchives(release, Stamp, new[] { zip }, game, null, CancellationToken.None, fault, confirmConflict);
+            library.InstallArchives(release, Stamp, new[] { zip }, game, null, CancellationToken.None, fault,
+                confirmConflict, null, confirmRemoval);
         }
         public static void Run(string root)
         {
@@ -508,10 +511,143 @@ namespace CampaignHangar
             VerifyJournal(root, game, shared);
             VerifyCcmCoexistence(root);
             VerifyConflictDialog(root);
+            VerifyCinematicsVariants(root);
+            VerifyInstallConflictRemovals(root);
             VerifySelectiveInstall(root);
             VerifyOperationIsolation(root);
             VerifyUI(root, ccm, card);
             Console.WriteLine("DEDICATED COMPLETE: isolated local install/update/uninstall/failure protection and UI; no real game, bank or network mutation.");
+        }
+        static void VerifyCinematicsVariants(string root)
+        {
+            string fixture = Path.Combine(root, "scmr-variant-switch-fixture");
+            Directory.CreateDirectory(fixture);
+            string game = Path.Combine(fixture, "game"), storage = Path.Combine(fixture, "storage");
+            Directory.CreateDirectory(Path.Combine(game, "Support64"));
+            File.WriteAllText(Path.Combine(game, "StarCraft II.exe"), "isolated-fixture");
+            File.WriteAllText(Path.Combine(game, "Support64", "SC2Switcher_x64.exe"), "isolated-fixture");
+            string bank = Path.Combine(fixture, "preserved.SC2Bank"), save = Path.Combine(fixture, "preserved.SC2Save");
+            File.WriteAllText(bank, "never-mutate-bank");
+            File.WriteAllText(save, "never-mutate-save");
+            string live = Data.Under(game, "Mods/SCMRcinematics.SC2Mod");
+            Directory.CreateDirectory(Path.GetDirectoryName(live));
+            File.WriteAllBytes(live, Mpq(99));
+            string originalHash = Data.Hash(live);
+            string zipA, zipB;
+            var a = Package(fixture, "mass-recall-ai", 1, 10, "1", out zipA, "Mods/SCMRcinematics.SC2Mod");
+            var b = Package(fixture, "sc-evo", 2, 11, "1", out zipB, "Mods/SCMRcinematics.SC2Mod");
+            var library = new DedicatedLibrary(storage);
+            Install(library, a, zipA, game);
+            Check(Data.Hash(live) == a.files[1].sha256 &&
+                library.Current().activeVariantId == a.id, "first SCMR release deploys pinned cinematics");
+            Reject(() => Install(library, b, zipB, game), "second incompatible SCMR edition requires explicit uninstall approval");
+            var cardA = new Campaign { id = a.id, kind = "dedicated" };
+            var cardB = new Campaign { id = b.id, kind = "dedicated" };
+            int approvals = 0;
+            Install(library, b, zipB, game, null, null, blockers => {
+                approvals++;
+                Check(blockers.Count == 1 && blockers[0].campaignId == a.id &&
+                    blockers[0].path == "Mods/SCMRcinematics.SC2Mod",
+                    "SCMR user consent names precisely the blocking installed campaign");
+                return true;
+            });
+            Check(approvals == 1 && Data.Hash(live) == b.files[1].sha256 &&
+                library.Current().installed.Count == 1 && library.Installed(a.id) == null &&
+                library.Current().activeVariantId == b.id &&
+                !File.Exists(Data.Under(game, a.launches[0].path)) &&
+                File.Exists(Data.Under(game, b.launches[0].path)),
+                "approved SCMR replacement marks old campaign uninstalled and keeps the new start map");
+            var startB = library.LaunchInfo(cardB, game);
+            Check(startB.Arguments.Contains("sc-evo"), "remaining SCMR installation still launches via its own exact start map");
+            File.WriteAllBytes(live, Mpq(77));
+            string tampered = Data.Hash(live);
+            Reject(() => library.LaunchInfo(cardA, game), "externally edited cinematics cannot be overwritten by automatic variant switch");
+            Check(Data.Hash(live) == tampered && library.Current().activeVariantId == b.id,
+                "rejected variant switch preserves unknown user modifications and active install identity");
+            File.WriteAllBytes(live, Mpq(11));
+            library.Uninstall(b.id, game);
+            Check(Data.Hash(live) == originalHash && library.Current().installed.Count == 0 &&
+                File.ReadAllText(bank) == "never-mutate-bank" && File.ReadAllText(save) == "never-mutate-save",
+                "last SCMR edition restores external original and never changes Bank or Save data");
+        }
+        static void VerifyInstallConflictRemovals(string root)
+        {
+            string fixture = Path.Combine(root, "install-conflict-removal-fixture");
+            Directory.CreateDirectory(fixture);
+            string game = Path.Combine(fixture, "game"), storage = Path.Combine(fixture, "storage");
+            Directory.CreateDirectory(Path.Combine(game, "Support64"));
+            File.WriteAllText(Path.Combine(game, "StarCraft II.exe"), "isolated-fixture");
+            File.WriteAllText(Path.Combine(game, "Support64", "SC2Switcher_x64.exe"), "isolated-fixture");
+            string live = Data.Under(game, "Mods/Shared.SC2Mod");
+            Directory.CreateDirectory(Path.GetDirectoryName(live));
+            File.WriteAllBytes(live, Mpq(99)); string originalHash = Data.Hash(live);
+            string bank = Path.Combine(fixture, "original.SC2Bank"), save = Path.Combine(fixture, "original.SC2Save");
+            File.WriteAllText(bank, "preserve-bank"); File.WriteAllText(save, "preserve-save");
+            var library = new DedicatedLibrary(storage);
+            string zipA, zipB, zipC, zipNew;
+            var a = Package(fixture, "former-a", 1, 10, "1", out zipA);
+            var b = Package(fixture, "former-b", 2, 10, "1", out zipB);
+            var identical = Package(fixture, "matching-hash", 4, 10, "1", out zipC);
+            var incoming = Package(fixture, "replacement-c", 3, 11, "1", out zipNew);
+            Install(library, a, zipA, game); Install(library, b, zipB, game);
+            int calls = 0;
+            Reject(() => Install(library, incoming, zipNew, game, null, null, blockers => {
+                calls++;
+                Check(blockers.Count == 2 && blockers.Any(c => c.campaignId == a.id) &&
+                    blockers.Any(c => c.campaignId == b.id) &&
+                    blockers.All(c => c.path == "Mods/Shared.SC2Mod"),
+                    "conflict list names every installed owner of differing shared mod bytes");
+                return false;
+            }), "canceling multi-owner removal aborts new installation");
+            Check(calls == 1 && library.Current().installed.Count == 2 &&
+                Data.Hash(live) == a.files[1].sha256 &&
+                File.Exists(Data.Under(game, a.launches[0].path)) &&
+                File.Exists(Data.Under(game, b.launches[0].path)) &&
+                library.Installed(incoming.id) == null,
+                "rejected removal leaves both prior installations, files and original mod unchanged");
+            Install(library, identical, zipC, game, null, null, blockers => {
+                throw new Exception("identical SHA256 must not trigger uninstall dialog");
+            });
+            Check(library.Current().installed.Count == 3,
+                "another campaign with identical shared file is installed without unnecessary warning or replacement");
+            // A bad ZIP must fail verification before any consent or uninstall.
+            string badZip = Path.Combine(fixture, "tampered.zip"); File.WriteAllText(badZip, "broken");
+            Reject(() => Install(library, incoming, badZip, game, null, null, blockers => {
+                throw new Exception("unverified download must not ask to remove a campaign");
+            }), "unverified incoming package cannot uninstall the existing campaigns");
+            Check(library.Current().installed.Count == 3 && Data.Hash(live) == a.files[1].sha256,
+                "failed ZIP verification preserves every existing installed record and shared mod");
+            File.WriteAllBytes(live, Mpq(77));
+            string editedHash = Data.Hash(live);
+            int unsafeApprovals = 0;
+            Reject(() => Install(library, incoming, zipNew, game, null, null, blockers => {
+                unsafeApprovals++; return true;
+            }), "user approval cannot uninstall any campaign when its shared mod was externally edited");
+            Check(unsafeApprovals == 1 && library.Current().installed.Count == 3 &&
+                Data.Hash(live) == editedHash && library.Installed(incoming.id) == null &&
+                File.Exists(Data.Under(game, a.launches[0].path)) &&
+                File.Exists(Data.Under(game, b.launches[0].path)),
+                "preflight blocks partial removal when the first shared file is user-modified");
+            File.WriteAllBytes(live, Mpq(10));
+            calls = 0;
+            Install(library, incoming, zipNew, game, null, null, blockers => {
+                calls++;
+                Check(blockers.Count == 3, "all three installed owners listed in one approval request");
+                return true;
+            });
+            Check(calls == 1 && library.Current().installed.Count == 1 &&
+                library.Installed(a.id) == null && library.Installed(b.id) == null &&
+                library.Installed(identical.id) == null && library.Installed(incoming.id) != null &&
+                Data.Hash(live) == incoming.files[1].sha256 &&
+                !File.Exists(Data.Under(game, a.launches[0].path)) &&
+                !File.Exists(Data.Under(game, b.launches[0].path)) &&
+                !File.Exists(Data.Under(game, identical.launches[0].path)) &&
+                File.Exists(Data.Under(game, incoming.launches[0].path)),
+                "approved removal uninstalls all conflicting campaigns before applying the incoming campaign");
+            library.Uninstall(incoming.id, game);
+            Check(Data.Hash(live) == originalHash && File.ReadAllText(bank) == "preserve-bank" &&
+                File.ReadAllText(save) == "preserve-save" && library.Current().installed.Count == 0,
+                "final uninstall restores original user mod and preserves Bank and Save fixtures");
         }
         static void VerifyOperationIsolation(string root)
         {
@@ -860,6 +996,42 @@ namespace CampaignHangar
         {
             var item = new Campaign { name = "전용 캠페인 · 격리 예시" };
             var conflict = new DedicatedConflict("fixture-ccm", "기존 캠페인 · 격리 예시", "Mods/Shared.SC2Mod");
+            using (var replacement = Hangar.DedicatedInstallRemovalDialog(item, new[] {
+                new DedicatedConflict("old-a", "Mass Recall AI", "Mods/SCMRcinematics.SC2Mod"),
+                new DedicatedConflict("old-b", "SC Evo 이전 설치본", "Mods/Shared.SC2Mod")
+            }))
+            {
+                replacement.Show(); Application.DoEvents();
+                replacement.VerifyFixture();
+                var cancelRemoval = (Button)replacement.CancelButton;
+                var continueButton = cancelRemoval.Parent.Controls.OfType<Button>()
+                    .Single(b => b.DialogResult == DialogResult.OK);
+                Check(continueButton.Text == "기존 캠페인 설치 제거 후 계속" &&
+                    cancelRemoval.Text == "취소" && replacement.AcceptButton == cancelRemoval &&
+                    replacement.MessageText.Contains("Mass Recall AI") &&
+                    replacement.MessageText.Contains("SC Evo 이전 설치본") &&
+                    replacement.MessageText.Contains("Mods/SCMRcinematics.SC2Mod") &&
+                    replacement.MessageText.Contains(item.name) &&
+                    replacement.MessageText.Contains("미설치 상태"),
+                    "dedicated install conflict names all blocking campaigns, offers uninstall-and-continue, defaults to Cancel");
+                replacement.ClientSize = new Size(750, 590); replacement.PerformLayout();
+                Capture(replacement, Path.Combine(root, "dedicated-uninstall-and-continue.png"));
+                replacement.Close();
+            }
+            foreach (bool approve in new[] { false, true })
+            using (var replacement = Hangar.DedicatedInstallRemovalDialog(item,
+                new[] { new DedicatedConflict("old", "기존 캠페인", "Mods/Shared.SC2Mod") }))
+            using (var timer = new System.Windows.Forms.Timer { Interval = 20 })
+            {
+                timer.Tick += delegate {
+                    timer.Stop();
+                    ((Button)replacement.CancelButton).Parent.Controls.OfType<Button>()
+                        .Single(b => b.DialogResult == (approve ? DialogResult.OK : DialogResult.Cancel)).PerformClick();
+                };
+                timer.Start();
+                Check(replacement.ShowDialog() == (approve ? DialogResult.OK : DialogResult.Cancel),
+                    "conflict removal prompt returns exact " + (approve ? "approval" : "cancel") + " selection");
+            }
             using (var dialog = Hangar.DedicatedConflictDialog(item, conflict, "설치"))
             {
                 dialog.Show(); Application.DoEvents(); dialog.VerifyFixture();

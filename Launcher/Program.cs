@@ -32,6 +32,8 @@ namespace CampaignHangar
                     Console.WriteLine("ZIP: " + package.Name + " | map/mod assets: " +
                         package.GameFiles.Count + " | candidate launchers: " + package.Choices.Count);
                     foreach (var choice in package.Choices) Console.WriteLine(choice.Kind + " | " + choice.Title);
+                    foreach (var file in package.GameFiles)
+                        Console.WriteLine("GAME PATH | " + file.GamePath + " <- " + file.Entry);
                     Console.WriteLine("READ ONLY PASS: no files extracted, installed, registered or launched.");
                     return 0;
                 }
@@ -298,7 +300,7 @@ namespace CampaignHangar
                 }
                 return result;
             }
-            if (args.Contains("--archive-check"))
+            if (args.Contains("--archive-check") || args.Contains("--recommend-api-check"))
             {
                 int result = 1;
                 string root = Path.Combine(Path.GetTempPath(), "campaign-archive-check-" + Guid.NewGuid().ToString("N"));
@@ -311,7 +313,15 @@ namespace CampaignHangar
                     form.Shown += async delegate
                     {
                         timer.Start();
-                        try { Console.WriteLine("ARCHIVE PASS: " + await view.VerifySiteAsync()); result = 0; }
+                        try {
+                            if(args.Contains("--recommend-api-check"))
+                            {
+                                Console.WriteLine("RECOMMEND SAFE PROBE: " + await view.ProbeRecommendationEndpointAsync());
+                                Console.WriteLine("RECOMMEND MOCK PASS: " + await view.VerifyRecommendationFlowWithMockAsync());
+                            }
+                            else Console.WriteLine("ARCHIVE PASS: " + await view.VerifySiteAsync());
+                            result = 0;
+                        }
                         catch (Exception error) { Console.Error.WriteLine(error); }
                         finally { timer.Stop(); form.Close(); }
                     };
@@ -364,7 +374,9 @@ namespace CampaignHangar
                 }
                 catch (Exception error) { Console.Error.WriteLine(error); return 1; }
             }
-            if (args.Length == 2 && args[0] == "--ui-hub-scroll-check" && AppChannel.HasThemedUi)
+            if (args.Length == 2 && (args[0] == "--ui-hub-scroll-check" ||
+                args[0] == "--detached-work-window-check" ||
+                args[0] == "--ui-hidden-share-check") && AppChannel.HasThemedUi)
             {
                 int code = 0;
                 string root = Path.GetFullPath(args[1]);
@@ -377,9 +389,21 @@ namespace CampaignHangar
                     {
                         form.BeginInvoke(new Action(async delegate
                         {
-                            try { await form.VerifyLiveHubScrollAsync(Path.Combine(root, "screenshots")); }
+                            try
+                            {
+                                form.QaSuppressErrorDialogs = true;
+                                if (args[0] == "--ui-hidden-share-check")
+                                    await form.VerifyHiddenAndSharedUiAsync(Path.Combine(root,"screenshots"));
+                                else if (args[0] == "--detached-work-window-check")
+                                    await form.VerifyDetachedWorkWindowOnlyAsync(Path.Combine(root, "screenshots"));
+                                else
+                                    await form.VerifyLiveHubScrollAsync(Path.Combine(root, "screenshots"));
+                                if (form.QaErrorCount != 0)
+                                    throw new InvalidOperationException("WebView E2E observed " + form.QaErrorCount +
+                                        " unexpected operation errors. See isolated qa-diagnostics and stderr.");
+                            }
                             catch (Exception error) { Console.Error.WriteLine(error); code = 1; }
-                            finally { form.Close(); }
+                            finally { form.QaSuppressErrorDialogs = false; form.Close(); }
                         }));
                     };
                     Application.Run(form);
@@ -428,6 +452,28 @@ namespace CampaignHangar
                 catch (Exception error) { Console.Error.WriteLine(error); }
                 return result;
             }
+            if (args.Length == 2 && args[0] == "--update-close-lifecycle-check" && AppChannel.HasThemedUi)
+            {
+                int result = 1;
+                string fixture = Path.GetFullPath(args[1]);
+                if (Directory.Exists(fixture)) throw new IOException("Use a new isolated update-close fixture folder.");
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using (var form = new Hangar(Path.Combine(fixture, "storage"), null, false))
+                {
+                    form.Shown += delegate
+                    {
+                        form.BeginInvoke(new Action(delegate
+                        {
+                            try { form.VerifyUpdateCloseLifecycle(); result = 0; }
+                            catch (Exception error) { Console.Error.WriteLine(error); }
+                            finally { if (!form.IsDisposed) form.Close(); }
+                        }));
+                    };
+                    Application.Run(form);
+                }
+                return result;
+            }
             using (var mutex = new Mutex(true, "Local\\CampaignHangarPreview", out created))
             {
                 if (!created) { MessageBox.Show("커캠 격납고가 이미 실행 중입니다.\n게임 파일 보호를 위해 개발판과 배포판도 동시에 실행하지 않습니다."); return 1; }
@@ -442,17 +488,17 @@ namespace CampaignHangar
                             reload = form.ReloadRequested;
                         }
                     }
-                    catch (UnauthorizedAccessException error)
+                    catch (Exception error)
                     {
+                        if (!Storage.IsAccessFailure(error)) throw;
                         // Never replace or reset an existing inaccessible library:
                         // the user's installed campaigns may still be inside it.
                         string storagePath = "(저장된 경로를 읽을 수 없음)";
                         try { storagePath = Storage.Resolve(Storage.PreferenceFile); }
                         catch (Exception) { }
                         MessageBox.Show("격납고 저장 폴더에 접근할 수 없습니다.\n\n" +
-                            "캠페인 보관소: " + storagePath + "\n\n" +
-                            "격납고를 종료하고 실행 파일을 우클릭해 '관리자 권한으로 실행'한 뒤 다시 시도해 주세요.\n" +
-                            "기존 보관소와 경로 설정은 다른 곳으로 변경하지 않았습니다.\n상세: " + error.Message,
+                            Storage.AccessDeniedGuidance(storagePath, "(앱 시작 전 경로 확인 불가)") +
+                            "\n상세: " + error.Message,
                             "보관소·다운로드 폴더 접근 거부", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return 1;
                     }

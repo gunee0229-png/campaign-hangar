@@ -50,9 +50,11 @@
     "contact-detail":"콘택트 상세","contact-wol":"자날 목록","contact-hots":"군심 목록",
     "contact-lotv":"공유 목록","contact-nova":"노바 목록","contact-dedicated":"전용 목록",
     launchButton:"캠페인 적용·실행",installButton:"설치·관리",detailButton:"상세 정보 보기",
-    screenshotButton:"스크린샷 관리",importZipButton:"ZIP 가져오기"};
+    screenshotButton:"스크린샷 관리",reviewButton:"리뷰 달기",
+    recommendButton:"추천",importZipButton:"ZIP 가져오기"};
   var PIECES = ["hero", "actions", "catalog"];
-  var ACTION_IDS = ["launchButton", "installButton", "detailButton", "screenshotButton", "importZipButton"];
+  var ACTION_IDS = ["launchButton", "installButton", "detailButton", "screenshotButton",
+    "reviewButton", "recommendButton", "importZipButton"];
   var FREE_ACTION_IDS=ACTION_IDS.slice();
   var FREE_IDS = ["header", "hero", "actions", "toolbar", "list", "detail"];
   // Allow a scrolling free canvas: the original one-viewport ceiling snapped
@@ -87,7 +89,7 @@
   }
   function defaultFree(id){
     var result={};FREE_IDS.forEach(function(k){var a=FREE_DEFAULTS[id][k]||CONTACT_PANELS[k.slice(8)];
-      if(FREE_ACTION_IDS.indexOf(k)>=0)a=[20+(FREE_ACTION_IDS.indexOf(k)%5)*192,408,180,65];
+      if(FREE_ACTION_IDS.indexOf(k)>=0)a=[20+FREE_ACTION_IDS.indexOf(k)*138,408,132,65];
       result[k]={x:a[0],y:a[1],w:a[2],h:a[3]};});return result;
   }
   var DEFAULTS = {
@@ -112,6 +114,7 @@
   };
   var api, profiles={}, theme="terran", editing=false, draft=null, undo=[], redo=[], original=null,
     applyEveryTheme=false,palettesOpen=false,lastNativeColors="";
+  var presetLibrary=[],presetName="내 커스텀 UI",presetPage=0;
   var dockFrame=0, lastDock="", archiveSuspended=false, activeRecordId="",
     workStart=0,workTimer=null,workDelay=null,workActive=false,
     dragging=null, resizing=null, moving=null, activeFreePanel="hero", temporaryTheme=false;
@@ -123,6 +126,21 @@
     var out=Array.isArray(input)?input.filter(function(x,i){return allowed.indexOf(x)>=0&&input.indexOf(x)===i;}):[];
     allowed.forEach(function(x){if(out.indexOf(x)<0)out.push(x);});
     return out;
+  }
+  function validActionOrder(input){
+    var previous=Array.isArray(input)?input.map(function(id){
+      return id==="favoriteButton"?"screenshotButton":id;
+    }):[];
+    var actions=validOrder(previous,ACTION_IDS);
+    var missing=previous.indexOf("reviewButton")<0||previous.indexOf("recommendButton")<0;
+    var tail=actions.length>=3&&actions[actions.length-3]==="importZipButton"&&
+      actions[actions.length-2]==="reviewButton"&&actions[actions.length-1]==="recommendButton";
+    if(missing||tail){
+      actions=actions.filter(function(id){return id!=="reviewButton"&&id!=="recommendButton";});
+      var beforeZip=actions.indexOf("importZipButton");
+      actions.splice(beforeZip,0,"reviewButton","recommendButton");
+    }
+    return actions;
   }
   function validNav(input){
     var nav=validOrder(input,MENU_IDS),a=nav.indexOf("all"),w=nav.indexOf("wol");
@@ -167,7 +185,7 @@
       cardHeight:clamp(v.cardHeight,72,150,d.cardHeight),
       parts:validOrder(v.parts,PIECES),nav:validNav(v.nav),
       hiddenCampaigns:Array.isArray(v.hiddenCampaigns)?CAMPAIGN_MENU_IDS.filter(function(k){return v.hiddenCampaigns.indexOf(k)>=0;}):[],
-      actions:validOrder((v.actions||[]).map(function(id){return id==="favoriteButton"?"screenshotButton":id;}),ACTION_IDS),navGap:clamp(v.navGap,0,18,d.navGap),
+      actions:validActionOrder(v.actions),navGap:clamp(v.navGap,0,18,d.navGap),
       menuShape:oneOf(v.menuShape,["auto","terran","protoss","zerg","nova"],"auto"),
       presentation:oneOf(v.presentation,Object.keys(PRESETS),"base"),
       colors:cleanColors(v.colors),contactOrder:validOrder(v.contactOrder,CONTACT_IDS),
@@ -517,7 +535,7 @@
       api.setView("all");
     byId("layoutEditor").hidden=api.live;
     syncEditorHandles();apply();renderEditor();
-    if(api.live)api.sendHost("editor-open");
+    if(api.live){api.sendHost("preset-request");api.sendHost("editor-open");}
   }
   function finishEdit(commit) {
     if(!editing)return;
@@ -566,6 +584,73 @@
     requestCloseEdit();
   }
   function button(text,cmd,cls){return '<button type="button" data-edit-action="'+cmd+'"'+(cls?' class="'+cls+'"':'')+'>'+text+'</button>';}
+  function shareSnapshot(){
+    if(!editing||!draft)return null;
+    var name=presetName.trim();
+    if(!name||name.length>48){api.toast("디자인 이름을 1~48자로 입력해 주세요.");return null;}
+    return {format:"campaign-hangar-ui",version:1,name:name,theme:theme,
+      layout:sanitize(draft,theme)};
+  }
+  function setPresetLibrary(items){
+    if(!Array.isArray(items))return false;
+    presetLibrary=items.filter(function(p){return p&&typeof p.id==="string"&&
+      /^[a-f\d]{32}$/i.test(p.id)&&typeof p.name==="string"&&p.layout;}).slice(0,64);
+    presetPage=Math.min(presetPage,Math.max(0,Math.ceil(presetLibrary.length/12)-1));
+    if(editing)renderEditor();
+    return true;
+  }
+  function persistDemoPresetLibrary(){
+    if(!api.live)try{localStorage.setItem("campaign-hangar-custom-presets",JSON.stringify(presetLibrary));}catch(_){}
+  }
+  function saveDraftToLibrary(){
+    var data=shareSnapshot();if(!data)return;
+    if(api.live){api.sendHost("preset-save:"+JSON.stringify(data));return;}
+    if(presetLibrary.length>=64){api.toast("보관함에는 최대 64개까지 저장할 수 있습니다.");return;}
+    presetLibrary.unshift({id:"00000000000000000000000000000000".replace(/0/g,function(){return Math.floor(Math.random()*16).toString(16);}),
+      name:data.name,theme:data.theme,layout:data.layout,shared:false,created:new Date().toISOString()});
+    presetPage=0;
+    persistDemoPresetLibrary();renderEditor();api.toast("디자인을 보관함에 저장했습니다.");
+  }
+  function applyStoredPreset(id){
+    var item=presetLibrary.find(function(p){return p.id===id;});
+    if(!item)return false;
+    var next=sanitize(item.layout,theme);
+    profiles[theme].layout=next;profiles[theme].preset="custom";
+    // The user explicitly applied a saved design; later Cancel must not undo it.
+    if(editing){original=clone(profiles[theme]);draft=clone(next);undo=[];redo=[];}
+    apply();persistProfiles();
+    if(editing){syncEditorHandles();renderEditor();}
+    api.toast("‘"+item.name+"’ 디자인을 현재 화면에 적용했습니다.");
+    return true;
+  }
+  function applyImportedPreset(item){
+    if(!item||!item.layout||typeof item.id!=="string")return false;
+    presetLibrary=[item].concat(presetLibrary.filter(function(p){return p.id!==item.id;})).slice(0,64);
+    presetPage=0;
+    return applyStoredPreset(item.id);
+  }
+  function presetFeedback(message){api.toast(String(message||"커스텀 UI 작업을 마쳤습니다."));}
+  function renderPresetLibrary(){
+    return '<section class="layout-library" aria-label="내 커스텀 UI 보관함">'+
+      '<div class="layout-library-heading"><strong>내 디자인 보관함</strong><small>저장된 '+presetLibrary.length+'개 디자인 · 공유받은 UI 포함</small></div>'+
+      '<label class="layout-library-name">디자인 이름<input type="text" maxlength="48" data-preset-name="1" value="'+escapeHtml(presetName)+'" placeholder="디자인 이름"></label>'+
+      '<div class="layout-library-actions">'+
+      button("보관함에 저장","library-save","layout-primary")+
+      button("내보내기","library-export")+
+      button("불러오기","library-import")+'</div>'+
+      '<div class="layout-library-list">'+
+      (presetLibrary.length?presetLibrary.slice(presetPage*12,presetPage*12+12).map(function(p){
+        return '<div class="layout-library-item"><div><strong title="'+escapeHtml(p.name)+'">'+escapeHtml(p.name)+
+          '</strong><small>'+(p.shared?'공유받은 UI':'내가 저장한 UI')+' · '+({terran:"테란",protoss:"프로토스",zerg:"저그",nova:"노바"}[p.theme]||"테마")+'</small></div>'+
+          '<div class="layout-library-item-actions">'+button("적용","library-apply-"+p.id)+
+          button("파일로","library-export-"+p.id)+button("삭제","library-delete-"+p.id)+'</div></div>';
+      }).join(""):'<p class="layout-library-empty">저장된 디자인이 없습니다. 편집한 UI를 보관하거나 공유 파일을 불러오세요.</p>')+
+      '</div>'+
+      (presetLibrary.length>12?'<div class="layout-library-pages">'+
+        button("이전","library-prev")+
+        '<span>'+(presetPage+1)+' / '+Math.ceil(presetLibrary.length/12)+'</span>'+
+        button("다음","library-next")+'</div>':'')+'</section>';
+  }
   function select(field,title,options,value) {
     return '<label>'+title+'<select data-layout-field="'+field+'">'+options.map(function(o){
       return '<option value="'+o[0]+'"'+(o[0]===value?' selected':'')+'>'+o[1]+'</option>';
@@ -589,32 +674,37 @@
       button("저장","apply","layout-primary")+'</div>'+
       '<div class="layout-editor-actions">'+button("되돌리기","undo")+button("다시 실행","redo")+
       button("취소","cancel")+'</div>'+
-      '<div class="layout-editor-row">'+
+      '<div class="layout-editor-dashboard">'+
+      '<section class="layout-editor-section layout-editor-section--geometry"><h3>화면 배치</h3>'+
+      '<div class="layout-editor-choices" aria-label="기본 배치 옵션">'+
       select("presentation","배치 유형",Object.keys(PRESETS).map(function(k){return [k,PRESETS[k].name];}),v.presentation)+
-      select("menuShape","메뉴 모양",[["auto","현재 종족"],["terran","테란 장갑형"],["protoss","프로토스 수정형"],["zerg","저그 생체형"],["nova","노바 전술형"]],v.menuShape)+'</div>'+
-      '<div class="layout-editor-row">'+
+      select("menuShape","메뉴 모양",[["auto","현재 종족"],["terran","테란 장갑형"],["protoss","프로토스 수정형"],["zerg","저그 생체형"],["nova","노바 전술형"]],v.menuShape)+
       select("menu","메뉴바 위치",[["left","좌측"],["top","상단"],["right","우측"],["bottom","하단"]],v.menu)+
       (["base","list"].indexOf(v.presentation)>=0?select("detail","상세정보 배치",[["right","우측"],["left","좌측"],["hidden","숨김"]],v.detail):'')+'</div>'+
-      '<div class="layout-editor-row">'+
+      '<h3 class="layout-editor-subheading">크기 및 간격</h3>'+
+      '<div class="layout-editor-metrics" aria-label="크기 및 간격 옵션">'+
       range("menuSize","메뉴 크기",v.menu==="left"||v.menu==="right"?170:70,v.menu==="left"||v.menu==="right"?340:104,v.menuSize,"px")+
       (["base","focus"].indexOf(v.presentation)>=0?range("heroHeight","대표 이미지 높이",145,440,v.heroHeight,"px"):'')+
       (["base","list"].indexOf(v.presentation)>=0&&v.detail!=="hidden"?range("detailWidth","상세 패널 너비",200,520,v.detailWidth,"px"):'')+
       (["base","focus"].indexOf(v.presentation)>=0?range("listHeight","목록 영역 높이",260,750,v.listHeight,"px"):'')+
       range("cols","목록 한 줄 카드",1,v.presentation==="contact"?3:4,Math.min(v.cols,v.presentation==="contact"?3:4),"개")+
-      range("spacing","패널 간격",5,30,v.spacing,"px")+'</div>'+
-      '<div class="layout-editor-row">'+
+      range("spacing","패널 간격",5,30,v.spacing,"px")+
       (v.presentation!=="contact"?range("cardHeight","카드 최소 높이",72,150,v.cardHeight,"px"):'')+
-      (v.presentation!=="contact"?range("navGap","메뉴 버튼 간격",0,18,v.navGap,"px"):'')+'</div>'+
+      (v.presentation!=="contact"?range("navGap","메뉴 버튼 간격",0,18,v.navGap,"px"):'')+'</div></section>'+
+      '<section class="layout-editor-section layout-editor-section--colors">'+
       '<section class="layout-color-panel"><strong>테마 색상 편집</strong><small>현재 테마에만 적용됩니다. 저장 전에는 미리보기입니다.</small>'+
       button("추천 색상 조합","palettes")+
       '<div class="layout-palettes"'+(palettesOpen?'':' hidden')+'>'+
       COLOR_COMBINATIONS.map(function(p,i){return '<button type="button" data-edit-action="palette-'+i+'">'+
         '<span class="palette-swatches" aria-hidden="true">'+p.slice(1,5).map(function(c){return '<i style="background:'+c+'"></i>';}).join("")+
         '</span>'+p[0]+'</button>';}).join("")+'</div>'+
-      COLOR_GROUPS.map(function(g){return '<fieldset><legend>'+g[0]+'</legend><div class="layout-color-grid">'+g[1].map(function(k){return '<label>'+COLOR_CAPTIONS[k]+
+      '<div class="layout-color-groups">'+
+      COLOR_GROUPS.map(function(g,i){return '<fieldset class="layout-color-group layout-color-group--'+
+        ["panel","surfaces","text","icons","status"][i]+'"><legend>'+g[0]+'</legend><div class="layout-color-grid">'+g[1].map(function(k){return '<label>'+COLOR_CAPTIONS[k]+
         '<input type="color" data-layout-color="'+k+'" value="'+editorColor(k)+'">'+
-        button("기본값","color-reset-"+k)+'</label>';}).join("")+'</div></fieldset>';}).join("")+
-      '<small>시작색·끝색을 다르게 지정하면 그라데이션, 같게 지정하면 단색입니다. 메뉴·목록·상세는 각각 조정할 수 있습니다.</small></section>'+
+        button("기본값","color-reset-"+k)+'</label>';}).join("")+'</div></fieldset>';}).join("")+'</div>'+
+      '<small>시작색·끝색을 다르게 지정하면 그라데이션, 같게 지정하면 단색입니다. 메뉴·목록·상세는 각각 조정할 수 있습니다.</small></section></section>'+
+      '<section class="layout-editor-section layout-editor-section--extras"><h3>추가 편집</h3>'+
       (v.presentation==="contact"?'<p class="layout-editor-help">콘택트형은 화면의 여섯 구역을 드래그해 순서를 바꿀 수 있습니다. 아래로 스크롤하면 노바·전용이 이어집니다.</p>':'')+
       '<div class="layout-quick-actions">'+button(v.free?"자유 배치 해제":"자유 배치","free")+
       button("기본색 되돌리기","reset-colors")+'</div>'+
@@ -626,6 +716,8 @@
         (v.hiddenElements.length?v.hiddenElements.map(function(k){return button(ELEMENT_LABELS[k]+" 복원","restore-"+k);}).join(""):
         '<p>숨긴 요소가 없습니다. 패널이나 버튼의 ×를 누르면 여기에 표시됩니다.</p>')+
         '</div></section>':'')+
+      '</section><section class="layout-editor-section layout-editor-section--saved">'+
+      renderPresetLibrary()+'</section></div>'+
       '<div class="layout-editor-footer">'+
       '<div class="layout-editor-actions">'+button("기본값 되돌리기","reset")+
       '<label class="layout-apply-all"><input type="checkbox" id="layoutAllThemes"'+
@@ -639,6 +731,9 @@
       e.addEventListener("change",function(){
         record();draft.texts[e.dataset.layoutText]=e.value.slice(0,120);apply();syncExternalEditor();
       });
+    });
+    byId("layoutEditor").querySelectorAll("[data-preset-name]").forEach(function(e){
+      e.addEventListener("input",function(){presetName=e.value.slice(0,48);});
     });
     byId("layoutEditor").querySelectorAll("[data-layout-field]").forEach(function(e){
       e.addEventListener("change",function(){change(e.dataset.layoutField,e.value);});
@@ -694,6 +789,9 @@
   function editorCommand(command){
     if(!editing||!command)return false;
     var root=byId("layoutEditor"),node;
+    if(command.action==="preset-name"){
+      presetName=String(command.value||"").slice(0,48);return true;
+    }
     if(command.action==="close"){requestCloseEdit();return true;}
     if(command.action==="window-close"){closeEditorWindow();return true;}
     if(command.action==="choice"){finishEdit(command.value==="yes");return true;}
@@ -712,6 +810,38 @@
   }
   function escapeHtml(s){return String(s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
   function editorAction(cmd){
+    if(cmd==="library-prev"){presetPage=Math.max(0,presetPage-1);return renderEditor();}
+    if(cmd==="library-next"){presetPage=Math.min(Math.ceil(presetLibrary.length/12)-1,presetPage+1);return renderEditor();}
+    if(cmd==="library-save")return saveDraftToLibrary();
+    if(cmd==="library-export"){
+      var snapshot=shareSnapshot();if(!snapshot)return;
+      if(api.live)api.sendHost("preset-export:"+JSON.stringify(snapshot));
+      else downloadDemoPreset(snapshot);
+      return;
+    }
+    if(cmd==="library-import"){
+      if(api.live)api.sendHost("preset-import");
+      else api.toast("실제 격납고에서 공유 파일 불러오기를 사용할 수 있습니다.");
+      return;
+    }
+    if(/^library-(apply|export|delete)-[a-f\d]{32}$/i.test(cmd)){
+      var parts=cmd.match(/^library-(apply|export|delete)-([a-f\d]{32})$/i);
+      var id=parts[2],action=parts[1],item=presetLibrary.find(function(p){return p.id===id;});
+      if(!item)return;
+      if(action==="apply")return applyStoredPreset(id);
+      if(action==="export"){
+        if(api.live)api.sendHost("preset-export-stored:"+id);
+        else downloadDemoPreset({format:"campaign-hangar-ui",version:1,
+          name:item.name,theme:item.theme,layout:item.layout});
+        return;
+      }
+      if(api.live)api.sendHost("preset-delete:"+id);
+      else if(window.confirm("‘"+item.name+"’을 보관함에서 삭제하시겠습니까?")){
+        presetLibrary=presetLibrary.filter(function(p){return p.id!==id;});
+        persistDemoPresetLibrary();renderEditor();
+      }
+      return;
+    }
     if(cmd==="palettes"){palettesOpen=!palettesOpen;return renderEditor();}
     if(cmd.indexOf("color-reset-")===0){
       var key=cmd.slice(12);if(COLOR_KEYS.indexOf(key)<0)return;
@@ -739,6 +869,12 @@
     if(cmd==="reset-colors"){record();draft.colors={};apply();return renderEditor();}
     if(cmd==="undo"&&undo.length){redo.push(clone(draft));draft=undo.pop();apply();syncEditorHandles();return renderEditor();}
     if(cmd==="redo"&&redo.length){undo.push(clone(draft));draft=redo.pop();apply();syncEditorHandles();return renderEditor();}
+  }
+  function downloadDemoPreset(preset){
+    var data=new Blob([JSON.stringify(preset,null,2)],{type:"application/json"});
+    var url=URL.createObjectURL(data),link=document.createElement("a");
+    link.href=url;link.download="CampaignHangar-UI.chui.json";link.click();
+    setTimeout(function(){URL.revokeObjectURL(url);},0);
   }
   function setupCampaignVisibility(){
     document.querySelectorAll(".side-nav [data-view]").forEach(function(node){
@@ -1344,6 +1480,7 @@
   }
   function init(host){
     api=host;ensureProfiles();setupCampaignVisibility();
+    if(!api.live)try{setPresetLibrary(JSON.parse(localStorage.getItem("campaign-hangar-custom-presets")||"[]"));}catch(_){}
     var quick=document.querySelector(".sidebar>.side-quick-actions");
     var first=document.querySelector(".sidebar>.archive-caption");
     if(quick&&first)first.parentNode.insertBefore(quick,first);
@@ -1445,6 +1582,8 @@
     getProfiles:function(){return clone(profiles);},
     getLayout:function(id){return clone(profiles[id||theme].layout);},
     getEditingLayout:function(){return editing?clone(draft):null;},
+    setPresetLibrary:setPresetLibrary,applyImportedPreset:applyImportedPreset,
+    presetFeedback:presetFeedback,getPresetLibrary:function(){return clone(presetLibrary);},
     isEditing:function(){return editing;},editorCommand:editorCommand,syncExternalEditor:syncExternalEditor
   };
   function siteSearchMatches(site,query){

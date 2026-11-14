@@ -1,11 +1,14 @@
 using System;
 using System.ComponentModel;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace CampaignHangar
@@ -259,7 +262,8 @@ namespace CampaignHangar
             try
             {
                 Directory.CreateDirectory(probe);
-                using (var file = File.Create(Path.Combine(probe, "test.tmp")))
+                using (var file = new FileStream(Path.Combine(probe, "test.tmp"),
+                    FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
                     file.WriteByte(1);
                 return true;
             }
@@ -270,7 +274,18 @@ namespace CampaignHangar
             finally
             {
                 // A failed probe must not leave the user's real app altered.
-                if (Directory.Exists(probe)) Directory.Delete(probe, true);
+                if (Directory.Exists(probe))
+                {
+                    // Newly written files may be briefly held by Defender or
+                    // another scanner even when the target is writable.
+                    for (int retry = 0; retry < 6; retry++)
+                    {
+                        try { Directory.Delete(probe, true); break; }
+                        catch (IOException) { if (retry == 5) throw; }
+                        catch (UnauthorizedAccessException) { if (retry == 5) throw; }
+                        Thread.Sleep(120 * (retry + 1));
+                    }
+                }
             }
         }
 
@@ -474,11 +489,72 @@ namespace CampaignHangar
             else {
                 if(Directory.Exists(target) && HasEntries(target))
                     throw new InvalidDataException("설치 폴더가 비어 있지 않습니다.");
-                Directory.CreateDirectory(target);
-                foreach(string name in AppUpdate.Files){
-                    string destination=Path.Combine(target,name);
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination));
-                    File.Copy(Path.Combine(source,name),destination,false);
+                // Prepare and verify every app file before publishing a new
+                // installation. A scanner-blocked copy must not leave a
+                // half-installed CampaignHangar folder that then rejects
+                // every later reinstall as an unknown application.
+                bool exists = Directory.Exists(target);
+                string stage = target + ".install-" + Guid.NewGuid().ToString("N");
+                Directory.CreateDirectory(stage);
+                try
+                {
+                    foreach (string name in AppUpdate.Files)
+                    {
+                        string output = Path.Combine(stage, name);
+                        Directory.CreateDirectory(Path.GetDirectoryName(output));
+                        File.Copy(Path.Combine(source, name), output, false);
+                        if (!String.Equals(AppUpdate.Hash(Path.Combine(source, name)),
+                            AppUpdate.Hash(output), StringComparison.OrdinalIgnoreCase))
+                            throw new IOException("설치 파일 검증에 실패했습니다: " + name);
+                    }
+                    if (!exists)
+                    {
+                        for (int attempt = 0; ; attempt++)
+                        {
+                            if (Directory.Exists(target) || File.Exists(target))
+                                throw new IOException("설치 진행 중 대상 경로에 다른 파일이 생겼습니다. 원본을 덮어쓰지 않았습니다.");
+                            try { Directory.Move(stage, target); break; }
+                            catch (Exception error)
+                            {
+                                if (!(error is UnauthorizedAccessException || error is IOException) ||
+                                    attempt == 6 || (error.HResult & 0xffff) != 5 &&
+                                    (error.HResult & 0xffff) != 32 && (error.HResult & 0xffff) != 33)
+                                    throw;
+                                Thread.Sleep(150 * (attempt + 1));
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // The user explicitly selected an existing empty
+                        // folder. Never delete that folder or unrelated files.
+                        var created = new List<string>();
+                        try
+                        {
+                            foreach (string name in AppUpdate.Files)
+                            {
+                                string destination = Path.Combine(target, name);
+                                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                                File.Copy(Path.Combine(stage, name), destination, false);
+                                created.Add(destination);
+                                if (AppUpdate.Hash(destination) != AppUpdate.Hash(Path.Combine(stage, name)))
+                                    throw new IOException("설치 파일 검증에 실패했습니다: " + name);
+                            }
+                        }
+                        catch
+                        {
+                            foreach (var file in created.AsEnumerable().Reverse())
+                                if (File.Exists(file)) File.Delete(file);
+                            throw;
+                        }
+                    }
+                }
+                finally
+                {
+                    if (Directory.Exists(stage))
+                        try { Directory.Delete(stage, true); }
+                        catch (IOException) { /* Keep only this unique staging folder for diagnosis. */ }
+                        catch (UnauthorizedAccessException) { /* No user-owned target is deleted. */ }
                 }
             }
         }
@@ -533,7 +609,11 @@ namespace CampaignHangar
             }catch(Exception error){
                 Console.Error.WriteLine(error);
                 if(args.Length==0)MessageBox.Show("설치하지 못했습니다.\n"+error.Message+
-                    "\n\n복구 자료: "+workspace,"커캠 격납고 설치",MessageBoxButtons.OK,MessageBoxIcon.Error);
+                    "\n\n1. 실행 중인 격납고를 종료하고 설치 파일을 우클릭해 '관리자 권한으로 실행'해 보세요."+
+                    "\n2. Windows 보안의 보호 기록을 확인하고 검증된 설치 파일만 예외로 허용해 보세요."+
+                    "\n3. 그래도 안 된다면 백신 실시간 감시를 잠시 끄고 설치 여부만 시험한 후 즉시 다시 켜세요."+
+                    "\n기존 설치 폴더나 사용자 데이터를 임의로 삭제하지 마세요."+
+                    "\n\n복구 자료: "+workspace,"커캠 격납고 설치 · 관리자 권한 확인",MessageBoxButtons.OK,MessageBoxIcon.Error);
                 return 1;
             }
         }

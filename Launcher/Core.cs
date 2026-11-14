@@ -136,6 +136,35 @@ namespace CampaignHangar
             if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) return path.Substring(4);
             return path;
         }
+        // Windows can deny a directory rename while a security scanner briefly
+        // opens one of its contents without FILE_SHARE_DELETE. Never override
+        // ACLs or replace an existing directory. Retry only transient Win32
+        // access/share violations while the source still exists.
+        public static void MoveDirectoryWithRetry(string source, string destination)
+        {
+            source = IoPath(source);
+            destination = IoPath(destination);
+            int[] waits = { 100, 200, 350, 550, 800, 1200, 1600 };
+            for (int attempt = 0; attempt <= waits.Length; attempt++)
+            {
+                if (Directory.Exists(destination) || File.Exists(destination))
+                    throw new IOException("대상 폴더가 이미 존재합니다. 덮어쓰지 않았습니다: " + DisplayPath(destination));
+                try { Directory.Move(source, destination); return; }
+                catch (Exception error)
+                {
+                    if (!(error is UnauthorizedAccessException || error is IOException)) throw;
+                    int win32 = error.HResult & 0xffff;
+                    bool temporary = win32 == 5 || win32 == 32 || win32 == 33;
+                    if (!temporary || attempt == waits.Length ||
+                        !Directory.Exists(source) || Directory.Exists(destination) || File.Exists(destination))
+                        throw new IOException("폴더 이동이 Windows에서 차단되었습니다. " +
+                            "원본은 임의로 삭제하거나 다른 위치로 옮기지 않았습니다. " +
+                            "검증된 프로그램의 보안 차단 기록과 파일 점유를 확인하세요.\n대상: " +
+                            DisplayPath(destination), error);
+                    System.Threading.Thread.Sleep(waits[attempt]);
+                }
+            }
+        }
         public static string[] FilesRecursively(string directory, string pattern)
         {
             return Directory.GetFiles(IoPath(directory), pattern, SearchOption.AllDirectories)
@@ -743,7 +772,7 @@ namespace CampaignHangar
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(movedVersion));
-                Directory.Move(source, movedVersion); moved = true;
+                Data.MoveDirectoryWithRetry(source, movedVersion); moved = true;
                 if (fault != null) fault(1);
                 selected.id = newId;
                 Data.Write(Path.Combine(movedVersion, "manifest.json"), selected);
@@ -763,7 +792,7 @@ namespace CampaignHangar
             }
             catch
             {
-                if (moved) Directory.Move(movedVersion, source);
+                if (moved) Data.MoveDirectoryWithRetry(movedVersion, source);
                 foreach (var pair in originals) File.WriteAllBytes(pair.Key, pair.Value);
                 if (Directory.Exists(destination)) Directory.Delete(destination, true);
                 throw;
@@ -958,7 +987,7 @@ namespace CampaignHangar
             }
             Data.Write(Path.Combine(stage, "manifest.json"), item);
             Directory.CreateDirectory(Data.IoPath(Path.GetDirectoryName(final)));
-            Directory.Move(Data.IoPath(stage), Data.IoPath(final));
+            PublishImportDirectory(stage, final);
             published = true;
             Data.Write(manifest, item);
             manifestChanged = true;
@@ -982,6 +1011,16 @@ namespace CampaignHangar
                 if (Directory.Exists(Data.IoPath(stage))) Directory.Delete(Data.IoPath(stage), true);
                 throw;
             }
+        }
+        // Antivirus/on-access scanners and ordinary preview/file readers can
+        // briefly hold a handle inside our own import staging directory.
+        // On Windows the atomic Directory.Move then reports Access Denied even
+        // though the account has write permission. Retry ONLY that bounded
+        // transient rename; do not grant permissions, redirect the library,
+        // or delete a pre-existing destination.
+        internal static void PublishImportDirectory(string stage, string final)
+        {
+            Data.MoveDirectoryWithRetry(stage, final);
         }
         internal static string Target(string gameRoot, string relative)
         {
@@ -1022,7 +1061,7 @@ namespace CampaignHangar
                     }
                     Data.Write(statePath, j.before);
                 }
-                Directory.Move(transaction, Path.Combine(Root, "recovered-" + Guid.NewGuid().ToString("N")));
+            Data.MoveDirectoryWithRetry(transaction, Path.Combine(Root, "recovered-" + Guid.NewGuid().ToString("N")));
                 return;
             }
             if (j.snapshots != null)
@@ -1042,7 +1081,7 @@ namespace CampaignHangar
                 }
             }
             Data.Write(statePath, j.before);
-            Directory.Move(transaction, Path.Combine(Root, "recovered-" + Guid.NewGuid().ToString("N")));
+            Data.MoveDirectoryWithRetry(transaction, Path.Combine(Root, "recovered-" + Guid.NewGuid().ToString("N")));
         }
         public void Activate(string id, string gameRoot, bool menuConfirmed, Action<int> fault, string versionKey = null, Action<WorkProgress> progress = null)
         {
@@ -1150,7 +1189,7 @@ namespace CampaignHangar
             Directory.CreateDirectory(Data.IoPath(Path.GetDirectoryName(destination)));
             if (Storage.SameVolume(source, destination))
             {
-                if (expected.directory) Directory.Move(Data.IoPath(source), Data.IoPath(destination));
+            if (expected.directory) Data.MoveDirectoryWithRetry(source, destination);
                 else File.Move(Data.IoPath(source), Data.IoPath(destination));
             }
             else
@@ -1158,7 +1197,7 @@ namespace CampaignHangar
                 // A failed partial copy must never be mistaken for a completed move.
                 string partial = destination + ".moving-" + Guid.NewGuid().ToString("N");
                 try { CopyNode(source, partial); VerifyNode(partial, expected);
-                    if (expected.directory) Directory.Move(Data.IoPath(partial), Data.IoPath(destination));
+            if (expected.directory) Data.MoveDirectoryWithRetry(partial, destination);
                     else File.Move(Data.IoPath(partial), Data.IoPath(destination));
                 }
                 catch { RemoveNode(partial); throw; }
@@ -1299,7 +1338,7 @@ namespace CampaignHangar
                     files = files, originals = originals.Values.ToList(), createdDirectories = created, managed = managed });
                 journal.committed = true;
                 Data.Write(Path.Combine(transaction, "journal.json"), journal);
-                Directory.Move(transaction, Path.Combine(Root, (item == null ? "completed-removal-" : "completed-") + Guid.NewGuid().ToString("N")));
+            Data.MoveDirectoryWithRetry(transaction, Path.Combine(Root, (item == null ? "completed-removal-" : "completed-") + Guid.NewGuid().ToString("N")));
             }
             catch { phase("recover"); if (progress != null) progress(new WorkProgress("이동 전 상태로 복구 중")); Recover(); throw; }
         }
@@ -1363,7 +1402,7 @@ namespace CampaignHangar
                     VerifyNode(Data.Under(staging, "before\\" + relative), snapshot);
                 }
                 Data.Write(Path.Combine(staging, "journal.json"), journal);
-                Directory.Move(staging, transaction);
+            Data.MoveDirectoryWithRetry(staging, transaction);
             }
             catch { if (Directory.Exists(staging)) Directory.Delete(staging, true); throw; }
             try
@@ -1394,7 +1433,7 @@ namespace CampaignHangar
                     previousActive = item == null ? null : old.active == item.id ? old.previousActive : old.active,
                     versionKey = item == null ? null : item.versionKey, gameRoot = gameRoot, files = files, originals = originals.Values.ToList(),
                     createdDirectories = created, managed = managed });
-                Directory.Move(transaction, Path.Combine(Root, (item == null ? "completed-removal-" : "completed-") + Guid.NewGuid().ToString("N")));
+            Data.MoveDirectoryWithRetry(transaction, Path.Combine(Root, (item == null ? "completed-removal-" : "completed-") + Guid.NewGuid().ToString("N")));
             }
             catch { if (progress != null) progress(new WorkProgress("실패한 전환 복구 중")); Recover(); throw; }
         }

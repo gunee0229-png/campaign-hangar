@@ -9,6 +9,13 @@ using Microsoft.Web.WebView2.WinForms;
 
 namespace CampaignHangar
 {
+    internal sealed class ArchiveRecommendationResult
+    {
+        public bool ok { get; set; }
+        public bool duplicate { get; set; }
+        public int? count { get; set; }
+        public string error { get; set; }
+    }
     public sealed class ArchiveView : UserControl
     {
         readonly WebView2 web = new WebView2();
@@ -351,13 +358,237 @@ namespace CampaignHangar
             }
             finally { web.CoreWebView2.NavigationCompleted -= handler; }
         }
-        public async Task OpenCampaignAsync(Campaign item)
+        internal static string CampaignReviewUrl(Campaign item)
         {
-            string url = Catalogue.DetailUrl(item);
+            string url=Catalogue.DetailUrl(item);
+            int hash=url.IndexOf('#');
+            return url.Insert(hash<0?url.Length:hash,"&view=reviews");
+        }
+        public async Task OpenCampaignAsync(Campaign item, bool reviews = false)
+        {
+            // campaigns.html supports this deep link itself: it opens the
+            // matching campaign, loads reviews and scrolls to the writing form.
+            string url = reviews?CampaignReviewUrl(item):Catalogue.DetailUrl(item);
             bool first = initialization == null;
             if (first) initialization = InitializeAsync(url);
             await initialization;
             if (!first && web.CoreWebView2 != null) web.CoreWebView2.Navigate(url);
+        }
+        internal async Task<string> ProbeRecommendationEndpointAsync()
+        {
+            await OpenAsync();
+            for(int i=0;i<120;i++)
+            {
+                if(web.CoreWebView2!=null&&web.Source!=null&&InternalUrl(web.Source.AbsoluteUri))
+                {
+                    try
+                    {
+                        var origin=Data.Json.Deserialize<string>(await web.ExecuteScriptAsync("location.origin"));
+                        if(String.Equals(origin,Data.Site,StringComparison.OrdinalIgnoreCase))
+                            break;
+                    }
+                    catch(Exception error){Trace.WriteLine("Recommendation probe readiness: "+error.Message);}
+                }
+                await Task.Delay(100);
+            }
+            if(web.CoreWebView2==null)throw new InvalidOperationException("WebView2 not ready.");
+            // QA only: invalid JSON does not contain a campaign ID; the server
+            // cannot insert a vote. Observe actual browser request handling.
+            const string script=@"(async function(){
+                var result={origin:location.origin};
+                try{
+                    var get=await fetch('/api/recommendations',{credentials:'same-origin'});
+                    result.getStatus=get.status;result.getType=get.headers.get('content-type');
+                    var post=await fetch('/api/recommendations',{
+                        method:'POST',headers:{'Content-Type':'application/json'},
+                        body:'{invalid_json:',credentials:'same-origin'
+                    });
+                    result.postStatus=post.status;result.postType=post.headers.get('content-type');
+                    var body=await post.text();
+                    result.postBody=body.slice(0,400);
+                }catch(error){result.error=String(error&&error.message||error);}
+                return result;
+            })()";
+            return await AwaitBrowserAsyncResult(script);
+        }
+        internal async Task<string> VerifyRecommendationFlowWithMockAsync()
+        {
+            if(web.CoreWebView2==null||web.Source==null||!InternalUrl(web.Source.AbsoluteUri))
+                throw new InvalidOperationException("추천 모의 테스트의 아카이브 브라우저가 준비되지 않았습니다.");
+            // Dedicated, disposable QA browser profile only. Intercept both
+            // recommendation GET and POST in memory so NO real vote is made.
+            var injected=await web.ExecuteScriptAsync(@"(function(){
+                if(window.__hangarQaOriginalFetch)return false;
+                window.__hangarQaOriginalFetch=window.fetch;
+                window.__hangarQaVotes={get:0,post:0,voted:false};
+                window.fetch=function(url,options){
+                    if(url!=='/api/recommendations')
+                        return window.__hangarQaOriginalFetch.apply(this,arguments);
+                    var q=window.__hangarQaVotes;
+                    var method=(options&&options.method||'GET').toUpperCase();
+                    var day=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+                    if(method==='GET'){
+                        q.get++;
+                        return Promise.resolve(new Response(JSON.stringify({
+                            day:day,counts:{},voted:q.voted?['case20-qa-fake-id']:[]
+                        }),{status:200,headers:{'Content-Type':'application/json'}}));
+                    }
+                    q.post++;
+                    var id=JSON.parse(options.body).campaignId;
+                    if(id==='case20-qa-fake-id'){
+                        q.voted=true;
+                        return Promise.resolve(new Response(JSON.stringify({
+                            day:day,count:44,voted:[id]
+                        }),{status:200,headers:{'Content-Type':'application/json'}}));
+                    }
+                    return Promise.resolve(new Response(JSON.stringify({
+                        error:'격리 모의 서버 점검 중'
+                    }),{status:503,headers:{'Content-Type':'application/json'}}));
+                };
+                return true;
+            })()");
+            if(injected!="true")throw new InvalidOperationException("모의 fetch를 설치하지 못했습니다.");
+            string checkedCounters=null;
+            Exception qaError=null;
+            try
+            {
+                var success=await RecommendCampaignAsync("case20-qa-fake-id",false);
+                if(!success.ok||success.count!=44||success.duplicate)
+                    throw new InvalidOperationException("성공한 서버 응답을 실패로 처리했습니다.");
+                var second=await RecommendCampaignAsync("case20-qa-fake-id",false);
+                if(second.ok||!second.duplicate)
+                    throw new InvalidOperationException("서버에 저장된 오늘 추천을 감지하지 못했습니다.");
+                var failed=await RecommendCampaignAsync("case20-qa-unavailable-id",false);
+                if(failed.ok||failed.duplicate||failed.error!="격리 모의 서버 점검 중")
+                    throw new InvalidOperationException("모의 서버 오류 처리가 부정확합니다.");
+                string counters=await web.ExecuteScriptAsync(
+                    "JSON.stringify(window.__hangarQaVotes)");
+                string actual=Data.Json.Deserialize<string>(counters);
+                if(!actual.Contains("\"get\":3")||!actual.Contains("\"post\":2")||
+                    !actual.Contains("\"voted\":true"))
+                    throw new InvalidOperationException("추천 재요청 방지 검증 실패: "+actual);
+                checkedCounters=actual;
+            }
+            catch(Exception error){qaError=error;}
+            if(web.CoreWebView2!=null)
+            {
+                await web.ExecuteScriptAsync(@"(function(){
+                    if(window.__hangarQaOriginalFetch){
+                        window.fetch=window.__hangarQaOriginalFetch;
+                        delete window.__hangarQaOriginalFetch;
+                        delete window.__hangarQaVotes;
+                    }
+                })()");
+            }
+            if(qaError!=null)throw new InvalidOperationException("추천 요청 모의 테스트 실패: "+qaError.Message,qaError);
+            return checkedCounters;
+        }
+        async Task<string> AwaitBrowserAsyncResult(string promiseExpression)
+        {
+            if(web.CoreWebView2==null)throw new InvalidOperationException("아카이브 브라우저가 준비되지 않았습니다.");
+            // WebView2.ExecuteScriptAsync does NOT await a JavaScript Promise:
+            // an async IIFE returned "{}" instantly, falsely reporting an
+            // unsuccessful vote even if the server had saved it. Attach an
+            // in-page completion callback and poll only its settled result.
+            // The expression (including any POST) is invoked EXACTLY ONCE.
+            string token=Guid.NewGuid().ToString("N");
+            string start=@"(function(){
+                var key=RESULT_KEY;
+                var bag=window.__hangarAsyncResponses||(window.__hangarAsyncResponses=Object.create(null));
+                if(bag[key])return false;
+                bag[key]={done:false};
+                Promise.resolve(PROMISE_EXPRESSION).then(function(value){
+                    bag[key]={done:true,value:value};
+                },function(error){
+                    bag[key]={done:true,value:{ok:false,error:String(error&&error.message||error)}};
+                });
+                return true;
+            })()".Replace("RESULT_KEY",Data.Json.Serialize(token))
+                .Replace("PROMISE_EXPRESSION",promiseExpression);
+            var started=await web.ExecuteScriptAsync(start);
+            if(!String.Equals(started,"true",StringComparison.Ordinal))
+                throw new InvalidOperationException("추천 요청을 시작하지 못했습니다.");
+            for(int attempt=0;attempt<250;attempt++)
+            {
+                string read=@"(function(){
+                    var bag=window.__hangarAsyncResponses;
+                    var item=bag&&bag[RESULT_KEY];
+                    if(!item||!item.done)return null;
+                    delete bag[RESULT_KEY];
+                    return item.value;
+                })()".Replace("RESULT_KEY",Data.Json.Serialize(token));
+                string value=await web.ExecuteScriptAsync(read);
+                if(!String.IsNullOrWhiteSpace(value)&&value!="null")
+                    return value;
+                await Task.Delay(100);
+            }
+            throw new TimeoutException("추천 응답을 확인하지 못했습니다. 다시 누르기 전에 아카이브의 오늘 추천 여부를 확인해 주세요.");
+        }
+        internal async Task<ArchiveRecommendationResult> RecommendCampaignAsync(string siteId, bool refreshOnSuccess = true)
+        {
+            if(!online) return new ArchiveRecommendationResult {ok=false,error="격리 검증에서는 실제 추천을 등록하지 않습니다."};
+            if(String.IsNullOrWhiteSpace(siteId)||siteId.Length>128)
+                throw new ArgumentException("추천할 사이트 캠페인을 확인할 수 없습니다.", "siteId");
+            await OpenAsync();
+            // Do not use a separate HTTP client: recommendation rate limits
+            // depend on the actual archive browser's origin/session.
+            bool ready=false;
+            for(int i=0;i<40;i++) {
+                if(web.CoreWebView2!=null && web.Source!=null && InternalUrl(web.Source.AbsoluteUri)) {
+                    try {
+                        var origin=Data.Json.Deserialize<string>(await web.ExecuteScriptAsync("location.origin"));
+                        ready=String.Equals(origin,Data.Site,StringComparison.OrdinalIgnoreCase);
+                    }catch(Exception e){Trace.WriteLine("Archive recommendation readiness: "+e.Message);}
+                }
+                if(ready)break;
+                await Task.Delay(150);
+            }
+            if(!ready)throw new InvalidOperationException("아카이브 연결을 확인하지 못했습니다. 연결 후 다시 시도해 주세요.");
+            var script=@"(async function(){
+                try {
+                    // The archive applies a per-campaign KST daily limit. Query
+                    // its same-session record first so a second click can show
+                    // the precise one-per-day message without sending a vote.
+                    try {
+                        var status=await fetch('/api/recommendations',{
+                            credentials:'same-origin',signal:AbortSignal.timeout(8000)
+                        });
+                        if(status.ok){
+                            var current=await status.json();
+                            var day=new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+                            if(current.day===day&&Array.isArray(current.voted)&&
+                               current.voted.includes(SITE_CAMPAIGN_ID))
+                                return {ok:false,duplicate:true,
+                                    error:'각 캠페인당 하루 한 번만 추천 가능합니다.'};
+                        }
+                    }catch(readError){
+                        // POST still has the authoritative duplicate guard.
+                    }
+                    var response=await fetch('/api/recommendations',{
+                        method:'POST',credentials:'same-origin',
+                        headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({campaignId:SITE_CAMPAIGN_ID}),
+                        signal:AbortSignal.timeout(10000)
+                    });
+                    var payload=await response.json();
+                    if(!response.ok){
+                        var message=String(payload.error||'추천을 저장하지 못했습니다.');
+                        return {ok:false,duplicate:/하루|이미.+추천|중복|한 번/.test(message),error:message};
+                    }
+                    return {ok:true,count:typeof payload.count==='number'?payload.count:null,error:null};
+                } catch(error) {
+                    return {ok:false,error:String(error&&error.message||'추천 연결에 실패했습니다.')};
+                }
+            })()".Replace("SITE_CAMPAIGN_ID",Data.Json.Serialize(siteId));
+            string value=await AwaitBrowserAsyncResult(script);
+            var result=Data.Json.Deserialize<ArchiveRecommendationResult>(value);
+            if(result==null)throw new IOException("아카이브 추천 응답을 읽을 수 없습니다.");
+            if(result.ok && refreshOnSuccess) {
+                // The archive's own counters/rate-limit UI read their state
+                // during page load; refresh those after a confirmed server vote.
+                web.Reload();
+            }
+            return result;
         }
         void ShowContent()
         {

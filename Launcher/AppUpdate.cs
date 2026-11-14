@@ -11,8 +11,8 @@ using System.Web.Script.Serialization;
 [assembly: System.Reflection.AssemblyVersion("0.2.6.0")]
 [assembly: System.Reflection.AssemblyFileVersion("0.2.6.0")]
 #else
-[assembly: System.Reflection.AssemblyVersion("0.2.5.2")]
-[assembly: System.Reflection.AssemblyFileVersion("0.2.5.2")]
+[assembly: System.Reflection.AssemblyVersion("0.2.5.3")]
+[assembly: System.Reflection.AssemblyFileVersion("0.2.5.3")]
 #endif
 #if DEVELOPMENT
 [assembly: System.Reflection.AssemblyProduct("CampaignHangar.development")]

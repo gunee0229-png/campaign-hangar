@@ -184,7 +184,7 @@ namespace CampaignHangar
         static void Move(string from, string to)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(to));
-            if (Directory.Exists(from)) Directory.Move(from,to);
+            if (Directory.Exists(from)) Data.MoveDirectoryWithRetry(from,to);
             else File.Move(from,to);
         }
         static void Remove(string path)

@@ -62,7 +62,7 @@ namespace CampaignHangar
         bool busy, requesting, deferredCatalogue;
         bool settingsLayoutDirty = true;
         int settingsMeasuredWidth = -1;
-        bool checkingAppUpdate, appUpdateInProgress;
+        bool checkingAppUpdate, appUpdateInProgress, appUpdateExitApproved;
         AppRelease availableAppUpdate;
         string declinedAppUpdateVersion;
         readonly Panel updateOffer = new Panel();
@@ -111,7 +111,16 @@ namespace CampaignHangar
             downloadPreferenceFile = isolated ? Path.Combine(root + "-profile", "downloads.json") : Storage.DownloadPreferenceFile;
             downloadsRoot = isolated && !File.Exists(preferenceFile) ? Path.Combine(root, "downloads")
                 : Storage.ResolveDownloads(downloadPreferenceFile, preferenceFile);
-            Directory.CreateDirectory(downloadsRoot);
+            // A previous version could have selected Downloads inside the
+            // protected game installation.  Keep that configured path intact,
+            // but do not prevent the entire launcher from opening when Windows
+            // denies access. The user can change it explicitly in Settings.
+            string downloadAccessProblem = null;
+            try { Directory.CreateDirectory(downloadsRoot); }
+            catch (UnauthorizedAccessException error) { downloadAccessProblem = error.Message; }
+            catch (IOException error) { downloadAccessProblem = error.Message; }
+            if (downloadAccessProblem != null)
+                Load += delegate { status.Text = "ZIP 다운로드 폴더 접근 불가 · 경로 설정에서 기존 위치와 권한을 확인하세요. " + downloadAccessProblem; };
             thumbnails = new ThumbnailStore(Path.Combine(root, "thumbnails"));
             var normalThumbnail = imageLoader ?? thumbnails.Get;
             loadThumbnail = item => {
@@ -493,7 +502,11 @@ namespace CampaignHangar
             zipDrop.AddSurface(this, false); zipDrop.AddSurface(navigation); zipDrop.AddSurface(status);
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
-                if (busy || distributionView.DownloadInProgress) { e.Cancel = true; status.Text = "작업을 마치거나 배포처의 다운로드 취소를 눌러 주세요."; }
+                // Keep the window alive while downloading/verifying an update,
+                // but let it exit after the separate updater has acknowledged
+                // readiness. Otherwise its 120s parent wait never completes.
+                if (!appUpdateExitApproved && (busy || distributionView.DownloadInProgress))
+                { e.Cancel = true; status.Text = "작업을 마치거나 배포처의 다운로드 취소를 눌러 주세요."; }
             };
             FormClosed += delegate { WindowSize.Save(this, windowPreference); thumbnails.Dispose(); };
             var backMouse = new BackMouseFilter(this, GoBack);
@@ -656,7 +669,22 @@ namespace CampaignHangar
             try
             {
                 bool author = openAuthorLauncher || ExternalCampaigns.LaunchMode(item) == "author-launcher";
-                var start = openAuthorLauncher ? ExternalCampaigns.AuthorLauncherInfo(item) : ExternalCampaigns.LaunchInfo(item, game.Text, episode);
+                string directMission = null;
+                if (!openAuthorLauncher && episode == 0 && OdysseyMissionDialog.Supports(item, game.Text))
+                {
+                    using (var chooser = new OdysseyMissionDialog(game.Text))
+                    {
+                        if (chooser.ShowDialog(this) != DialogResult.OK) return Task.FromResult(false);
+                        directMission = chooser.SelectedMap;
+                    }
+                }
+                // A direct mission bypasses the SC2 engine's potentially
+                // failing GameSetNextMap handoff. It never patches the map.
+                var start = directMission != null
+                    ? ExternalCampaigns.LaunchInfo(new Campaign {
+                        kind = "external", launchMode = "map", launcherMap = directMission }, game.Text)
+                    : openAuthorLauncher ? ExternalCampaigns.AuthorLauncherInfo(item) :
+                        ExternalCampaigns.LaunchInfo(item, game.Text, episode);
                 ExternalCampaigns.RequireGameClosed(game.Text);
                 activity.ObserveTime(null, null, (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency);
                 using (var process = Process.Start(start))
@@ -669,7 +697,10 @@ namespace CampaignHangar
                 }
                 externalSession = item.id; externalProcess = null;
                 externalPendingUntil = (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency + 120;
-                status.Text = "전용 캠페인 실행 요청 완료 · " + item.name + (episode == 0 ? "" : " · 에피소드 " + episode) + " · 게임 실행 확인 후 시간을 기록합니다.";
+                status.Text = "전용 캠페인 실행 요청 완료 · " + item.name +
+                    (directMission == null ? episode == 0 ? "" : " · 에피소드 " + episode :
+                        " · 임무 직접 실행: " + Path.GetFileNameWithoutExtension(directMission)) +
+                    " · 게임 실행 확인 후 시간을 기록합니다.";
                 return Task.FromResult(true);
             }
             catch (Exception error) { externalSession = null; externalProcess = null; Error(error); return Task.FromResult(false); }
@@ -2087,6 +2118,25 @@ namespace CampaignHangar
                     return dialog.ShowDialog(this) == DialogResult.OK;
             }));
         }
+        internal static AppDialog DedicatedInstallRemovalDialog(Campaign item, IReadOnlyList<DedicatedConflict> conflicts)
+        {
+            string blockers = String.Join("\n", conflicts.Select(c => "• " + c.campaignName + "\n   충돌 파일: " + c.path));
+            string message = "설치할 캠페인: " + item.name +
+                "\n\n다음 전용 캠페인이 동일한 경로에 다른 모드 파일을 사용하여 설치가 막혔습니다.\n" +
+                blockers +
+                "\n\n위 캠페인을 설치 제거해 미설치 상태로 바꾸고 계속할까요?" +
+                "\n원본 ZIP, Bank, Save, 기록 및 다른 캠페인이 공유하는 파일은 보존합니다." +
+                "\n새 캠페인 파일은 먼저 검증합니다. 이후 설치가 실패하면 제거한 캠페인은 미설치 상태로 남을 수 있습니다.";
+            return new AppDialog("전용 캠페인 설치 충돌", message, "기존 캠페인 설치 제거 후 계속", "취소")
+                { ClientSize = new Size(750, 590), MinimumSize = new Size(640, 480) };
+        }
+        bool ConfirmDedicatedInstallRemoval(Campaign item, IReadOnlyList<DedicatedConflict> conflicts)
+        {
+            return (bool)Invoke(new Func<bool>(delegate {
+                using (var dialog = DedicatedInstallRemovalDialog(item, conflicts))
+                    return dialog.ShowDialog(this) == DialogResult.OK;
+            }));
+        }
         void OpenCreator(Campaign item)
         {
             if (DistributionPolicy.Https(item.creatorUrl)) Process.Start(item.creatorUrl);
@@ -2110,7 +2160,8 @@ namespace CampaignHangar
                     string selectedGame = game.Text;
                     await RunWork("전용 캠페인 설치", progress => {
                         dedicatedLibrary.Install(selected, selectedGame, progress, cancellation.Token,
-                            conflict => ConfirmDedicatedConflict(item, conflict, "설치")); return true;
+                            conflict => ConfirmDedicatedConflict(item, conflict, "설치"),
+                            conflicts => ConfirmDedicatedInstallRemoval(item, conflicts)); return true;
                     }, cancellation);
                 }
                 installedView.Reveal(catalogue, item);
@@ -2409,8 +2460,25 @@ namespace CampaignHangar
         async Task PickGame()
         {
             if (busy || distributionView.DownloadInProgress) return;
-            using (var file = new OpenFileDialog { Filter = "StarCraft II.exe|StarCraft II.exe", Title = "게임 실행 파일 선택" })
-                if (file.ShowDialog(this) == DialogResult.OK) await SelectGamePath(Path.GetDirectoryName(file.FileName));
+            try
+            {
+                using (var file = new OpenFileDialog { Filter = "StarCraft II.exe|StarCraft II.exe", Title = "게임 실행 파일 선택" })
+                    if (file.ShowDialog(this) == DialogResult.OK) await SelectGamePath(Path.GetDirectoryName(file.FileName));
+            }
+            catch (Exception error) { ShowGamePathFailure(game.Text, error); }
+        }
+        internal Exception QaGamePathSelectionFailure;
+        void ShowGamePathFailure(string selectedGame, Exception error)
+        {
+            bool denied = Storage.IsAccessFailure(error);
+            string message = denied
+                ? "게임 경로: " + selectedGame + "\n오류: " + error.Message + "\n\n" +
+                    Storage.AccessDeniedGuidance(root, downloadsRoot)
+                : Storage.GamePathFailureGuidance(selectedGame, root, downloadsRoot, error);
+            status.Text = denied ? "게임 경로 지정 실패 · 폴더 접근 거부" : "게임 경로 지정 실패 · " + error.Message;
+            Console.Error.WriteLine("Game path selection failed: " + error);
+            if (!IsDisposed)
+                AppDialog.Info(this, message, "게임 경로 지정 실패 · 관리자 권한 확인");
         }
         async Task SelectGamePath(string selectedGame)
         {
@@ -2418,36 +2486,36 @@ namespace CampaignHangar
             string destination = null, selectedDownloads = null;
             try
             {
-                destination = Storage.DefaultForGame(selectedGame);
-                selectedDownloads = Storage.DefaultDownloadsForGame(selectedGame);
-                if (!AppDialog.Confirm(this, "게임 폴더: " + selectedGame + "\n보관소: " + destination +
-                    "\n다운로드: " + selectedDownloads +
-                    "\n\n캠페인 파일을 저장하는 폴더입니다." +
-                    "\n캠페인 교체 시 기존 파일을 이곳에 백업합니다." +
-                    "\n" + Storage.RelocationDescription(root, destination),
+                // Game selection used to move the entire library to a sibling
+                // of StarCraft II and create Downloads inside its game folder.
+                // Both are commonly protected under Program Files, and moving
+                // a live library can fail due to file locks or antivirus scans.
+                destination = root;
+                selectedDownloads = downloadsRoot;
+                if (!AppDialog.Confirm(this, "게임 폴더: " + selectedGame + "\n보관소(그대로 유지): " + destination +
+                    "\n다운로드(그대로 유지): " + selectedDownloads +
+                    "\n\n게임 경로만 등록합니다. 보관소를 이동하거나 게임 폴더에 다운로드 폴더를 생성하지 않습니다." +
+                    "\n원한다면 설정의 '보관소 경로 변경' 또는 '다운로드 경로 변경'을 따로 사용하세요." +
+                    "\n프로그램 파일 설치 경로에 맵을 적용할 때는 Windows 권한 승인이 필요할 수 있습니다.",
                     "게임 경로·보관소 설정", "설정 적용")) return;
                 SetBusy(true);
                 if (refreshing != null) await refreshing;
-                var result = await RunWork("게임 경로·보관소 설정",
-                    progress => Storage.SelectGame(root, selectedGame, preferenceFile, progress));
+                await RunWork("게임 실행 경로 설정", progress => {
+                    if (isolated && QaGamePathSelectionFailure != null)
+                        throw QaGamePathSelectionFailure;
+                    Storage.ConnectGameOnly(root, selectedGame, preferenceFile, downloadPreferenceFile, downloadsRoot);
+                    return true;
+                });
                 game.Text = Storage.ResolveGame(preferenceFile, null);
                 storagePath.Text = Storage.Resolve(preferenceFile);
                 downloadPath.Text = Storage.ResolveDownloads(downloadPreferenceFile, preferenceFile);
                 SetBusy(false);
                 AppDialog.Info(this, "보관소: " + storagePath.Text + "\n다운로드: " + downloadPath.Text +
-                    (result.backup == null ? "" : "\n이전 대상 폴더의 자료: " + result.backup) +
-                    (result.warning == null ? "" : "\n" + result.warning) +
-                    "\n기존 ZIP 파일은 원래 위치에 그대로 두었습니다.\n설정을 반영하기 위해 앱 화면을 다시 엽니다.", "설정 완료");
+                    "\n보관소와 ZIP은 이동하거나 삭제하지 않았습니다." +
+                    "\n설정을 반영하기 위해 앱 화면을 다시 엽니다.", "설정 완료");
                 ReloadRequested = true; Close();
             }
-            catch (UnauthorizedAccessException error)
-            {
-                string message = Storage.AccessDeniedGuidance(destination ?? "(설정 전)",
-                    selectedDownloads ?? "(설정 전)") + "\n\n상세: " + error.Message;
-                status.Text = "게임 경로 설정 미완료 · 폴더 접근 거부";
-                AppDialog.Info(this, message, "폴더 접근 권한이 없습니다");
-            }
-            catch (Exception error) { Error(error); }
+            catch (Exception error) { ShowGamePathFailure(selectedGame, error); }
             finally { if (!IsDisposed) SetBusy(false); }
         }
         async Task ChangeStorage()
@@ -2672,6 +2740,10 @@ namespace CampaignHangar
                 }
                 if (approved == null) { ShowUpdateOffer(release, manual); return; }
                 if (isolated) throw new InvalidOperationException("격리 알림 시험에서는 업데이트 설치를 진행하지 않습니다.");
+                // An open editor can contain uncommitted user changes. Do not
+                // force-close it as part of the updater's process handoff.
+                if (hubEditorWindow != null && !hubEditorWindow.IsDisposed)
+                    throw new InvalidOperationException("열려 있는 커스텀 편집창의 변경사항을 저장하거나 취소하고 닫은 뒤 업데이트해 주세요.");
                 appUpdateInProgress = true; updateOwnsControls = true; SetBusy(true); Enabled = false;
                 string workspace = Path.Combine(Path.GetTempPath(), "hangar-app-update-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(workspace);
@@ -2699,7 +2771,13 @@ namespace CampaignHangar
                     });
                     if (!ready) throw new IOException("업데이트 프로그램의 시작을 확인하지 못했습니다. 기존 앱은 종료하지 않습니다.");
                 }
-                Enabled = true; Close();
+                // The updater is now waiting for this process to exit. Do not
+                // let the busy guard cancel Close(), and release optional
+                // editor windows before the handoff starts.
+                appUpdateExitApproved = true;
+                Enabled = true;
+                Close();
+                if (!IsDisposed) throw new IOException("업데이트를 위해 기존 격납고를 종료하지 못했습니다.");
             }
             catch (Exception error)
             {
@@ -2714,7 +2792,7 @@ namespace CampaignHangar
             }
             finally
             {
-                checkingAppUpdate = false; appUpdateInProgress = false;
+                checkingAppUpdate = false; appUpdateInProgress = false; appUpdateExitApproved = false;
                 if (!IsDisposed && updateOwnsControls) { Enabled = true; SetBusy(false); }
             }
         }
@@ -2784,7 +2862,51 @@ namespace CampaignHangar
             Console.WriteLine("Isolated screenshots: " + root);
             appUpdateFixture = null;
         }
-        void Error(Exception error) { status.Text = "작업 미완료 · " + error.Message; AppDialog.Info(this, error.Message, "작업 미완료"); }
+        internal bool QaSuppressErrorDialogs;
+        internal int QaErrorCount;
+        void Error(Exception error)
+        {
+            // Previously only the localized error.Message appeared. A
+            // sporadic "개체 참조" dialog contained no stack or failing
+            // operation, making it impossible to distinguish UI races from
+            // file/permission faults. Keep a bounded *local-only* diagnostic
+            // with the original stack and current call site. Never upload it.
+            string message = error == null ? "알 수 없는 오류" : error.Message;
+            bool accessProblem = Storage.IsAccessFailure(error);
+            if (accessProblem)
+                message = Storage.AccessDeniedGuidance(root, downloadsRoot) + "\n\n상세: " + message;
+            try
+            {
+                string folder = isolated ? Path.Combine(root, "qa-diagnostics") :
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CampaignHangar", "logs");
+                Directory.CreateDirectory(folder);
+                string log = Path.Combine(folder, "errors-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+                if (File.Exists(log) && new FileInfo(log).Length > 1024 * 1024)
+                    log = Path.Combine(folder, "errors-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + ".log");
+                File.AppendAllText(log, DateTime.Now.ToString("o") + "\n" +
+                    new System.Diagnostics.StackTrace(1, true) + "\n" +
+                    (error == null ? "(no exception)" : error.ToString()) + "\n\n", new System.Text.UTF8Encoding(false));
+                Console.Error.WriteLine("HANGAR ERROR LOG: " + log + "\n" + error);
+            }
+            catch (IOException) { Console.Error.WriteLine(error); }
+            catch (UnauthorizedAccessException) { Console.Error.WriteLine(error); }
+            if (!IsDisposed) status.Text = "작업 미완료 · " + message;
+            if (isolated && QaSuppressErrorDialogs)
+            {
+                QaErrorCount++;
+                return; // The QA harness fails with the captured stack, not a modal hang.
+            }
+            if (!IsDisposed) AppDialog.Info(this, message,
+                accessProblem ? "폴더 접근 실패 · 관리자 권한 확인" : "작업 미완료");
+        }
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e);
+            // Only tear down the WebView/embedded archive after every handler
+            // agrees to close. A canceled close used to dispose the owned
+            // archive window, then a late archive-rect message raised JIT.
+            if (!e.Cancel) BeginHubShutdown();
+        }
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); GlassTheme.ApplyTitleBar(Handle); }
         internal async Task VerifyGamePathSwitch()
         {
@@ -2797,6 +2919,57 @@ namespace CampaignHangar
             Directory.CreateDirectory(downloadsRoot);
             File.WriteAllText(Path.Combine(downloadsRoot, "keep.zip"), "preserved download");
             string oldDownloads = downloadsRoot;
+            // Reproduce both an ACL/antivirus access denial that was wrapped
+            // into an IOException and an ordinary missing-game-path failure.
+            // The real error dialog must be visible and must preserve all
+            // existing settings and files in either case.
+            string oldPreference = File.Exists(preferenceFile) ? File.ReadAllText(preferenceFile) : null;
+            for (int failure = 0; failure < 2; failure++)
+            {
+                bool confirmed = false, warning = false;
+                string selected = failure == 0 ? fixtureGame : Path.Combine(root, "no-such-sc2");
+                QaGamePathSelectionFailure = failure == 0
+                    ? (Exception)new IOException("임시 등록 폴더 접근 거부",
+                        new UnauthorizedAccessException("보호된 폴더 접근 불가"))
+                    : null;
+                try
+                {
+                    using (var warningTimer = new System.Windows.Forms.Timer { Interval = 50 })
+                    {
+                        warningTimer.Tick += delegate
+                        {
+                            var dialog = Application.OpenForms.OfType<AppDialog>().FirstOrDefault();
+                            if (dialog == null) return;
+                            if (dialog.Text == "게임 경로·보관소 설정")
+                            {
+                                confirmed = true;
+                                dialog.DialogResult = DialogResult.OK;
+                            }
+                            else if (dialog.Text == "게임 경로 지정 실패 · 관리자 권한 확인")
+                            {
+                                warning = dialog.MessageText.Contains("관리자 권한으로 실행") &&
+                                    dialog.MessageText.Contains("백신") &&
+                                    dialog.MessageText.Contains("즉시 다시 켜세요") &&
+                                    dialog.MessageText.Contains("StarCraft II.exe") == (failure == 1);
+                                dialog.VerifyFixture();
+                                dialog.DialogResult = DialogResult.Cancel;
+                            }
+                            else throw new InvalidOperationException("Unexpected path-failure QA dialog: " + dialog.Text);
+                        };
+                        warningTimer.Start();
+                        await SelectGamePath(selected);
+                        warningTimer.Stop();
+                    }
+                }
+                finally { QaGamePathSelectionFailure = null; }
+                if (!confirmed || !warning ||
+                    (File.Exists(preferenceFile) ? File.ReadAllText(preferenceFile) : null) != oldPreference ||
+                    File.ReadAllText(Path.Combine(root, "packages", "keep.txt")) != "preserved campaign" ||
+                    File.ReadAllText(Path.Combine(oldDownloads, "keep.zip")) != "preserved download" ||
+                    ReloadRequested)
+                    throw new InvalidOperationException("Failed game selection must show admin/AV advice while preserving all paths/data. mode=" + failure);
+            }
+            Console.WriteLine("UI PASS: access denied and missing SC2 path both show actual admin/AV guidance without changing storage or downloads.");
             bool accepted = false, complete = false, refreshed = false;
             using (var timer = new System.Windows.Forms.Timer { Interval = 50 })
             {
@@ -2808,8 +2981,8 @@ namespace CampaignHangar
                     else if (dialog.Text == "설정 완료")
                     {
                         complete = true;
-                        refreshed = game.Text == fixtureGame && storagePath.Text == Storage.DefaultForGame(fixtureGame) &&
-                            downloadPath.Text == Path.Combine(fixtureGame, AppChannel.DownloadsFolder);
+                        refreshed = game.Text == fixtureGame && storagePath.Text == root &&
+                            downloadPath.Text == oldDownloads;
                         dialog.DialogResult = DialogResult.OK;
                     }
                     else { Console.Error.WriteLine("Game switch dialog: " + dialog.Text + " · " + dialog.MessageText); dialog.DialogResult = DialogResult.Cancel; }
@@ -2818,18 +2991,19 @@ namespace CampaignHangar
                 await SelectGamePath(fixtureGame);
                 timer.Stop();
             }
-            string expectedRoot = Storage.DefaultForGame(fixtureGame);
-            string expectedDownloads = Path.Combine(fixtureGame, AppChannel.DownloadsFolder);
+            string expectedRoot = root;
+            string expectedDownloads = oldDownloads;
             if (!accepted || !complete || !refreshed || !ReloadRequested ||
                 Storage.Resolve(preferenceFile) != expectedRoot ||
                 Storage.ResolveDownloads(downloadPreferenceFile, preferenceFile) != expectedDownloads ||
                 File.ReadAllText(Path.Combine(expectedRoot, "packages", "keep.txt")) != "preserved campaign" ||
                 File.ReadAllText(Path.Combine(oldDownloads, "keep.zip")) != "preserved download")
-                throw new InvalidOperationException("Game selection must complete copy, refresh all three fields and persist paths before reloading. " +
+                throw new InvalidOperationException("Game selection must keep storage and downloads paths while persisting the game and reloading. " +
                     "accepted=" + accepted + "; complete=" + complete + "; reload=" + ReloadRequested + "; " + status.Text);
-            if (Directory.Exists(Path.Combine(root, "packages")))
-                throw new InvalidOperationException("Successful same-volume relocation must not leave old campaign files behind.");
-            Console.WriteLine("UI PASS: accepted game selection moves library, refreshes all three paths and reloads; original ZIP remains and no real game data is used.");
+            if (Directory.Exists(Path.Combine(fixtureGame, "Downloads")) ||
+                Directory.Exists(Storage.DefaultForGame(fixtureGame)))
+                throw new InvalidOperationException("Game path selection must not create folders inside or alongside a protected game installation.");
+            Console.WriteLine("UI PASS: game-only setup preserves live library and downloads, original ZIP and game files; no relocation or admin rights required.");
         }
         internal void VerifyLayout()
         {
@@ -2846,14 +3020,15 @@ namespace CampaignHangar
                     if (dialog == null) return;
                     timer.Stop();
                     gameSetupSeen = dialog.Text == "게임 경로·보관소 설정" &&
-                        dialog.MessageText.Contains(Storage.DefaultForGame(fixtureGame));
+                        dialog.MessageText.Contains(root) &&
+                        dialog.MessageText.Contains("그대로 유지");
                     try { dialog.VerifyFixture(); } finally { dialog.DialogResult = DialogResult.Cancel; }
                 };
                 timer.Start(); SelectGamePath(fixtureGame).GetAwaiter().GetResult(); timer.Stop();
             }
             if (!gameSetupSeen || storagePath.Text != root || downloadPath.Text != downloadsRoot)
-                throw new InvalidOperationException("Game selection must offer its child library, with cancellation preserving all paths.");
-            Console.WriteLine("UI PASS: game path selection offers CampaignStorage outside the game folder; confirmation fits and cancellation preserves paths.");
+                throw new InvalidOperationException("Game selection must preserve the existing storage and downloads paths on cancel.");
+            Console.WriteLine("UI PASS: game path selection previews preservation of existing library/downloads, and cancel changes nothing.");
             if (storagePath.Text != root || downloadPath.Text != downloadsRoot ||
                 !Descendants(settings).OfType<Button>().Any(b => b.Text == "다운로드 경로 변경") ||
                 !Descendants(settings).OfType<Button>().Any(b => b.Text == "보관소 경로 변경") ||

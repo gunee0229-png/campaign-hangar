@@ -26,10 +26,11 @@
       else if(node.dataset.layoutRange)send({action:"range",key:node.dataset.layoutRange,value:node.value,preview:preview});
       else if(node.dataset.layoutColor)send({action:"color",key:node.dataset.layoutColor,value:node.value,preview:preview});
       else if(node.dataset.layoutText)send({action:"text",key:node.dataset.layoutText,value:node.value});
+      else if(node.dataset.presetName)send({action:"preset-name",value:node.value});
       else if(node.id==="layoutAllThemes")send({action:"all",value:node.checked});
     }
     root.addEventListener("input",function(e){
-      if(e.target.matches('[data-layout-range],[data-layout-color]'))field(e.target,true);
+      if(e.target.matches('[data-layout-range],[data-layout-color],[data-preset-name]'))field(e.target,true);
     });
     root.addEventListener("change",function(e){field(e.target,false);});
     root.addEventListener("click",function(e){

@@ -65,11 +65,15 @@
   if (liveMode) campaigns = [];
   var state = {
     theme:"terran", selected:"revolite", view:"all", favorites:new Set(["revolite"]),
-    favoritesOnly:false, search:"", category:"all", sort:"playtime", mode:"grid", contrast:false, reduceMotion:false
+    favoritesOnly:false, search:"", category:"all", sort:"playtime", mode:"grid", contrast:false, reduceMotion:false,
+    hiddenCampaignIds:new Set(),showHiddenCampaigns:false
   };
   if (liveMode) state.favorites = new Set();
   var el = function (id) { return document.getElementById(id); };
   var bootFrame = null, toastTimer = null;
+  var recommendPendingId="",recommendStartedAt=0,recommendNoticeSerial=0;
+  var recommendFadeTimer=null,recommendHideTimer=null,recommendedOnDay=Object.create(null);
+  var recommendBurstTimer=null,recommendBurstSerial=0,recommendAnchor=null;
   var liveDataReceived = false, registeredCount = 12, installedOnly = false;
   var themeSwitchSerial=0,viewHistory=[];
   var hostWorkActive=false,hostWorkDisplayed=false,hostWorkSequence=-1,hostWorkId=0,hostWorkDismissedId=-1;
@@ -311,7 +315,8 @@
     var grid=el("contactGrid");if(!grid)return;
     Object.keys(CONTACT_SLOTS).forEach(function(slot){
       var root=grid.querySelector('[data-contact-items="'+slot+'"]');if(!root)return;
-      var list=campaigns.filter(function(c){return c.category===CONTACT_SLOTS[slot];});
+      var list=campaigns.filter(function(c){return c.category===CONTACT_SLOTS[slot] &&
+        (state.showHiddenCampaigns||!state.hiddenCampaignIds.has(c.id));});
       root.innerHTML=list.length?list.map(function(c){return '<button type="button" class="contact-campaign'+
         (c.id===state.selected?' is-selected':'')+'" data-contact-id="'+safe(c.id)+'" title="'+safe(c.name)+'">'+
         '<img src="'+safe(c.img)+'" alt="" loading="lazy"><span><strong>'+safe(c.name)+'</strong><small>'+
@@ -337,6 +342,75 @@
     if (toastTimer) window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(function () { el("toast").hidden = true; }, 3200);
   }
+  function recommendationToday(){
+    return new Date(Date.now()+9*60*60*1000).toISOString().slice(0,10);
+  }
+  function recommendationNotice(headline,description,phase,duration){
+    var notice=el("recommendationNotice");
+    if(recommendFadeTimer!==null){clearTimeout(recommendFadeTimer);recommendFadeTimer=null;}
+    if(recommendHideTimer!==null){clearTimeout(recommendHideTimer);recommendHideTimer=null;}
+    var serial=++recommendNoticeSerial;
+    notice.hidden=false;
+    notice.classList.remove("is-fading");
+    notice.dataset.phase=phase;
+    setText("recommendationGlyph",THEMES[state.theme].glyph);
+    setText("recommendationEyebrow",THEMES[state.theme].bootKind);
+    setText("recommendationHeadline",headline);
+    setText("recommendationDescription",description);
+    if(duration===null)return;
+    // Total display time is 1.5 seconds, including the last 340 ms
+    // gentle fade. A slow network request stays in the working state.
+    var visibleFor=Math.max(0,Number(duration)||0),fadeMs=Math.min(340,visibleFor);
+    recommendFadeTimer=setTimeout(function(){
+      if(serial===recommendNoticeSerial)notice.classList.add("is-fading");
+    },Math.max(0,visibleFor-fadeMs));
+    recommendHideTimer=setTimeout(function(){
+      if(serial===recommendNoticeSerial){notice.hidden=true;notice.classList.remove("is-fading");}
+    },visibleFor);
+  }
+  function showRecommendationStars(){
+    var fx=el("recommendationBurst"),button=el("recommendButton");
+    var rect=button.getBoundingClientRect(),anchor=recommendAnchor ||
+      {x:rect.left+rect.width/2,y:rect.top+rect.height/2};
+    var serial=++recommendBurstSerial;
+    if(recommendBurstTimer!==null){clearTimeout(recommendBurstTimer);recommendBurstTimer=null;}
+    fx.hidden=false;fx.replaceChildren();
+    fx.style.left=Math.round(Math.min(innerWidth-26,Math.max(26,anchor.x)))+"px";
+    fx.style.top=Math.round(Math.min(innerHeight-26,Math.max(26,anchor.y)))+"px";
+    var ring=document.createElement("span");ring.className="recommendation-burst-flash";fx.appendChild(ring);
+    var core=document.createElement("span");core.className="recommendation-burst-core";fx.appendChild(core);
+    for(var i=0;i<18;i++){
+      var star=document.createElement("span");star.className="recommendation-burst-star";
+      star.style.setProperty("--angle",(i*20)+"deg");
+      star.style.setProperty("--distance",(72+(i%4)*12)+"px");
+      star.style.setProperty("--size",(9+(i%3)*5)+"px");
+      star.style.setProperty("--delay",((i%4)*32)+"ms");
+      fx.appendChild(star);
+    }
+    var reduced=state.reduceMotion||window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    recommendBurstTimer=setTimeout(function(){
+      if(serial===recommendBurstSerial){fx.hidden=true;fx.replaceChildren();}
+    },reduced?420:1500);
+  }
+  function requestRecommendation(){
+    var item=chosen();
+    if(!item || item.kind==="resource")return false;
+    if(recommendPendingId)return false;
+    if(recommendedOnDay[item.id]===recommendationToday()){
+      recommendationNotice("오늘의 추천 완료","각 캠페인당 하루 한 번만 추천 가능합니다.",
+        "duplicate",1500);
+      return false;
+    }
+    recommendPendingId=item.id;
+    recommendStartedAt=performance.now();
+    var button=el("recommendButton"),rect=button.getBoundingClientRect();
+    recommendAnchor={x:rect.left+rect.width/2,y:rect.top+rect.height/2};
+    button.classList.add("is-recommend-pending");
+    button.setAttribute("aria-busy","true");
+    if(liveMode)sendHost("recommend-campaign:"+item.id);
+    else recommendationResult(item.id,false,null,"실제 격납고에서만 추천을 등록할 수 있습니다.",false);
+    return true;
+  }
   var cardContextId="";
   function hideCardMenu(){cardContextId="";el("cardContextMenu").hidden=true;}
   function showCardMenu(id,x,y){
@@ -346,7 +420,33 @@
     var maxY=Math.max(8,window.innerHeight-menu.offsetHeight-10);
     menu.style.left=Math.min(maxX,Math.max(8,x))+"px";
     menu.style.top=Math.min(maxY,Math.max(8,y))+"px";
+    var visibility=menu.querySelector('[data-card-action="visibility"]');
+    visibility.textContent=state.hiddenCampaignIds.has(id)?"숨김 해제":"캠페인 숨기기";
+    visibility.setAttribute("aria-label",visibility.textContent);
     menu.querySelector('[data-card-action="apply"]').focus();
+  }
+  function updateHiddenToggle(){
+    var button=el("showHiddenCampaigns"),count=el("hiddenCampaignCount");
+    var total=campaigns.filter(function(c){return state.hiddenCampaignIds.has(c.id);}).length;
+    button.setAttribute("aria-pressed",String(state.showHiddenCampaigns));
+    button.classList.toggle("is-active",state.showHiddenCampaigns);
+    button.title=state.showHiddenCampaigns?"숨긴 캠페인 다시 감추기":"숨긴 캠페인 보기";
+    button.setAttribute("aria-label",button.title);
+    count.hidden=total===0;count.textContent=String(total);
+  }
+  function setHiddenCampaignIds(ids){
+    if(!Array.isArray(ids))return false;
+    state.hiddenCampaignIds=new Set(ids.filter(function(id){return typeof id==="string"&&id.length<=128;}));
+    renderCards();return true;
+  }
+  function toggleCardHidden(id){
+    if(!campaigns.some(function(c){return c.id===id;}))return false;
+    if(state.hiddenCampaignIds.has(id))state.hiddenCampaignIds.delete(id);
+    else state.hiddenCampaignIds.add(id);
+    if(liveMode)sendHost("hidden-campaigns:"+JSON.stringify(Array.from(state.hiddenCampaignIds)));
+    else try{localStorage.setItem("campaign-hangar-hidden-cards",JSON.stringify(Array.from(state.hiddenCampaignIds)));}catch(_){}
+    toast(state.hiddenCampaignIds.has(id)?"캠페인을 숨겼습니다. 검색창 오른쪽 눈 아이콘에서 다시 볼 수 있습니다.":"캠페인 숨김을 해제했습니다.");
+    hideCardMenu();renderCards();return true;
   }
   function actionIcon(name){
     var paths={
@@ -354,6 +454,7 @@
       install:'<path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5"/>',
       detail:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
       camera:'<path d="m3 7 4 0 2-3h6l2 3h4v13H3Z"/><circle cx="12" cy="13" r="4"/>',
+      review:'<path d="M4 4h16v13H9l-5 4V4Z"/><path d="M8 9h8M8 13h5"/>',
       star:'<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/>',
       zip:'<path d="M5 3h10l4 4v14H5Z"/><path d="M10 3v10m0 3v2m5-15v5h4"/>',
       back:'<path d="m10 5-7 7 7 7M3 12h18"/>',
@@ -369,7 +470,7 @@
   }
   function installActionIcons(){
     var names={launchButton:"apply",installButton:"install",detailButton:"detail",
-      screenshotButton:"camera",importZipButton:"zip"};
+      screenshotButton:"camera",reviewButton:"review",recommendButton:"star",importZipButton:"zip"};
     Object.keys(names).forEach(function(id){var node=el(id).querySelector(".action-icon");
       if(node)node.innerHTML=actionIcon(names[id]);});
     var rail=document.querySelector(".action-rail-label span");if(rail)rail.innerHTML=actionIcon("quick");
@@ -382,6 +483,22 @@
       node.innerHTML=actionIcon(name==="update"?"reload":name==="link"?"external":name)+
         "<span>"+safe(node.textContent)+"</span>";
     });
+  }
+  function updateCompactActionLabels(){
+    var strip=document.querySelector(".action-strip");
+    if(!strip)return;
+    var width=strip.getBoundingClientRect().width;
+    if(width>0)strip.dataset.compactActions=String(width<970);
+  }
+  function observeCompactActionLabels(){
+    var strip=document.querySelector(".action-strip");
+    if(!strip)return;
+    if(typeof ResizeObserver==="function"){
+      var observer=new ResizeObserver(function(){updateCompactActionLabels();});
+      observer.observe(strip);
+    }
+    window.addEventListener("resize",updateCompactActionLabels);
+    updateCompactActionLabels();
   }
   function installMenuIcons(){
     var paths={
@@ -514,6 +631,7 @@
   }
   function filtered() {
     var result = campaigns.filter(function (c) {
+      if(!state.showHiddenCampaigns && state.hiddenCampaignIds.has(c.id))return false;
       var allowed = (!installedOnly||c.installed||c.dedicated) && (
         state.view === "installed" ? c.installed :
         state.view === "wol" ? c.category==="자날" :
@@ -547,10 +665,12 @@
   function cardMarkup(c, ordinal) {
     var selected = state.selected === c.id, favored = state.favorites.has(c.id);
     return '<button type="button" class="campaign-card' + (selected ? ' is-selected' : '') +
+      (state.hiddenCampaignIds.has(c.id)?' is-hidden-campaign':'')+
       '" data-card="' + safe(c.id) + '" aria-pressed="' + selected +
       '" aria-label="' + safe(c.name) + ' 캠페인 선택">' +
       '<span class="card-cover"><img loading="lazy" draggable="false" src="' + safe(c.img) + '" alt=""></span>' +
       '<span class="card-copy"><span class="card-topline"><span class="card-name">' + safe(c.name) +
+      (state.hiddenCampaignIds.has(c.id)?' <small class="card-hidden-label">숨김</small>':'')+
       '</span>'+(appliedLabel(c.id)?'<span class="applied-state">'+appliedLabel(c.id)+'</span>':'')+'</span>'+
       (c.en && c.en.trim().toLocaleLowerCase("ko")!==c.name.trim().toLocaleLowerCase("ko")?
       '<span class="card-kind">'+safe(c.en)+'</span>':'') +
@@ -564,6 +684,7 @@
   }
   function renderCards() {
     var items = filtered();
+    updateHiddenToggle();
     // Filtered views must not keep advertising an unrelated campaign in
     // the large preview, detail sidebar, or execution/management buttons.
     // A newly empty search/favorites view has no actionable selection.
@@ -596,8 +717,13 @@
   }
   function refreshSelected() {
     var c = chosen();
-    ["launchButton","installButton","detailButton","recordDetails"]
+    ["launchButton","installButton","detailButton","reviewButton","recommendButton","recordDetails"]
       .forEach(function(id){el(id).disabled = !c;});
+    if(c){
+      var voteable=c.kind!=="resource";
+      el("reviewButton").disabled=!voteable;
+      el("recommendButton").disabled=!voteable;
+    }
     el("favoriteButton").disabled=false;
     el("favoriteButton").setAttribute("aria-pressed",String(state.favoritesOnly));
     el("favoriteButton").innerHTML=actionIcon("star");
@@ -635,7 +761,11 @@
       c.versionKey&&c.versionKey===activationState.versionKey;
     el("launchButton").disabled=!!applied;
     if(dedicated&&!c.installed)el("launchButton").disabled=true;
-    setText("primaryActionText",dedicated?"캠페인 실행":applied?"적용됨":"캠페인 적용");
+    var primaryLabel=dedicated?"캠페인 실행":applied?"적용됨":"캠페인 적용";
+    setText("primaryActionText",primaryLabel);
+    setText("primaryActionShort",dedicated?"실행":applied?"적용됨":"적용");
+    el("launchButton").setAttribute("aria-label",primaryLabel);
+    el("launchButton").title=primaryLabel;
     setText("heroTitle", c.name);
     setText("heroDescription", c.desc);
     setText("heroTag",appliedLabel(c.id) || (liveMode&&!dedicated?"선택한 캠페인":c.installed ?
@@ -956,6 +1086,7 @@
       button.addEventListener("click",function(){
         var id=cardContextId,action=button.dataset.cardAction;hideCardMenu();
         if(!id)return;
+        if(action==="visibility"){toggleCardHidden(id);return;}
         if(liveMode)sendHost("manage-action:"+action+":"+id);
         else toast("컨텍스트 메뉴는 실제 개발판에서 작동합니다.");
       });
@@ -1006,6 +1137,11 @@
       state.search = e.target.value; resetSmoothScroll(el("campaignList").parentElement);
       el("campaignList").parentElement.scrollTop=0;renderCards();
     });
+    el("showHiddenCampaigns").addEventListener("click",function(){
+      state.showHiddenCampaigns=!state.showHiddenCampaigns;
+      renderCards();
+      toast(state.showHiddenCampaigns?"숨긴 캠페인도 표시합니다.":"숨긴 캠페인을 다시 감췄습니다.");
+    });
     el("campaignCategory").addEventListener("change", function (e) {
       state.category=e.target.value; resetSmoothScroll(el("campaignList").parentElement);
       el("campaignList").parentElement.scrollTop=0;renderCards();
@@ -1029,6 +1165,14 @@
     el("importZipButton").addEventListener("click",function(){
       if(liveMode) sendHost("import-zip");
       else toast("ZIP 가져오기는 실제 개발판에서 사용할 수 있습니다.");
+    });
+    el("recommendButton").addEventListener("click",function(){
+      requestRecommendation();
+    });
+    el("reviewButton").addEventListener("click",function(){
+      var item=chosen();if(!item)return;
+      if(liveMode)sendHost("review-campaign:"+item.id);
+      else toast("실제 리뷰 작성은 격납고 개발판에서 사용할 수 있습니다.");
     });
     el("favoriteButton").addEventListener("click", toggleFavoritesFilter);
     el("screenshotButton").addEventListener("click",function(){
@@ -1195,11 +1339,31 @@
     renderCards();refreshSelected();
     return true;
   }
+  function recommendationResult(id,success,count,message,duplicate){
+    var item=campaigns.find(function(c){return c.id===id;});
+    if(item&&success&&count!==null&&count!==undefined&&Number.isFinite(Number(count)))
+      item.recommendations=Number(count);
+    if(success || duplicate)recommendedOnDay[id]=recommendationToday();
+    recommendPendingId="";
+    recommendAnchor=recommendAnchor||null;
+    el("recommendButton").classList.remove("is-recommend-pending");
+    el("recommendButton").removeAttribute("aria-busy");
+    if(item&&success){renderCards();refreshSelected();}
+    if(duplicate)
+      recommendationNotice("오늘의 추천 완료","각 캠페인당 하루 한 번만 추천 가능합니다.",
+        "duplicate",1500);
+    else if(success)showRecommendationStars();
+    else toast(String(message||"추천을 완료하지 못했습니다. 아카이브 연결 상태를 확인해 주세요."));
+    recommendAnchor=null;
+    return !!(item&&success);
+  }
 
   window.runSmoke = runSmoke;
   window.UiLab = {selectCampaign:selectCampaign,setTheme:setTheme,setView:setView,filtered:filtered,
     replayBoot:replayBoot,finishBoot:finishBoot,mode:setMode,getState:function(){return state;},
-    setRealCampaigns:setRealCampaigns,setFavoriteIds:setFavoriteIds,navigateBack:navigateBack,
+    setRealCampaigns:setRealCampaigns,setFavoriteIds:setFavoriteIds,setHiddenCampaignIds:setHiddenCampaignIds,
+    recommendationResult:recommendationResult,requestRecommendation:requestRecommendation,
+    toggleCardHidden:toggleCardHidden,navigateBack:navigateBack,
     setActivationState:setActivationState,setWorkProgress:setWorkProgress,
     workWindowAttached:workWindowAttached,dismissWorkWindow:dismissWorkWindow,
     showWorkFullScreen:function(){showWorkBrowse(false);},
@@ -1213,7 +1377,9 @@
     }};
   document.addEventListener("DOMContentLoaded",function () {
     bindEvents();
+    if(!liveMode)try{setHiddenCampaignIds(JSON.parse(localStorage.getItem("campaign-hangar-hidden-cards")||"[]"));}catch(_){}
     installActionIcons();
+    observeCompactActionLabels();
     if (window.HangarFeatures) window.HangarFeatures.init({
       sendHost:sendHost, setView:setView, selected:chosen, getState:function(){return state;},
       campaigns:function(){return campaigns.slice();},renderContacts:renderContactGrid,

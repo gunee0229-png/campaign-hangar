@@ -57,6 +57,9 @@ namespace CampaignHangar
     public sealed class DedicatedState
     {
         public string gameRoot { get; set; }
+        // Installed campaign whose incompatible shared SCMR cinematics version
+        // is currently deployed. Other campaigns remain registered.
+        public string activeVariantId { get; set; }
         public List<DedicatedInstalled> installed { get; set; }
         public List<DedicatedOriginal> originals { get; set; }
         public DedicatedState()
@@ -93,6 +96,34 @@ namespace CampaignHangar
         public const int InstallerVersion = 4;
         readonly string root, statePath, transaction;
         readonly Dictionary<string, DedicatedRelease> checkedReleases = new Dictionary<string, DedicatedRelease>();
+        const string SwitchableCinematics = "Mods/SCMRcinematics.SC2Mod";
+        static bool VariantPath(string path) { return String.Equals(path, SwitchableCinematics, StringComparison.OrdinalIgnoreCase); }
+        string VariantBackup(string hash)
+        {
+            if (!HashText(hash)) throw new InvalidDataException("공용 모드의 검증값이 올바르지 않습니다.");
+            return Data.Under(root, "variants/" + hash + ".SC2Mod");
+        }
+        void RememberVariant(string source, string expectedHash)
+        {
+            string cached = VariantBackup(expectedHash);
+            if (File.Exists(cached))
+            {
+                if (Data.Hash(cached) != expectedHash) throw new IOException("공용 모드 보관본의 검증값이 다릅니다: " + cached);
+                return;
+            }
+            if (!File.Exists(source) || Data.Hash(source) != expectedHash)
+                throw new IOException("공용 모드 원본 파일의 SHA256 검증에 실패했습니다: " + source);
+            Directory.CreateDirectory(Path.GetDirectoryName(cached));
+            string temporary = cached + ".new-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                Data.Copy(source, temporary);
+                if (Data.Hash(temporary) != expectedHash)
+                    throw new IOException("공용 모드 보관본의 SHA256 검증에 실패했습니다.");
+                File.Move(temporary, cached);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
         public DedicatedLibrary(string storage)
         {
             root = Data.Under(storage, "dedicated");
@@ -344,12 +375,14 @@ namespace CampaignHangar
             return release;
         }
         public void Install(Campaign item, string gameRoot, Action<WorkProgress> progress, CancellationToken cancellation,
-            Func<DedicatedConflict, bool> confirmConflict = null)
+            Func<DedicatedConflict, bool> confirmConflict = null,
+            Func<IReadOnlyList<DedicatedConflict>, bool> confirmRemoval = null)
         {
-            InstallRestored(item, gameRoot, progress, cancellation, confirmConflict, null);
+            InstallRestored(item, gameRoot, progress, cancellation, confirmConflict, null, confirmRemoval);
         }
         void InstallRestored(Campaign item, string gameRoot, Action<WorkProgress> progress, CancellationToken cancellation,
-            Func<DedicatedConflict, bool> confirmConflict, Dictionary<string, string> restoredFiles)
+            Func<DedicatedConflict, bool> confirmConflict, Dictionary<string, string> restoredFiles,
+            Func<IReadOnlyList<DedicatedConflict>, bool> confirmRemoval = null)
         {
             RequireGame(gameRoot);
             Directory.CreateDirectory(root);
@@ -357,14 +390,34 @@ namespace CampaignHangar
             Directory.CreateDirectory(work);
             var release = FetchRelease(item, work, cancellation);
             InstallSnapshot(release, item.dedicatedManifestSha256, work, gameRoot, progress, cancellation,
-                Download, confirmConflict, restoredFiles);
+                Download, confirmConflict, restoredFiles, confirmRemoval);
         }
         internal void InstallSnapshot(DedicatedRelease release, string manifestHash, string work, string gameRoot,
             Action<WorkProgress> progress, CancellationToken cancellation,
             Action<string, string, long, string, Action<WorkProgress>, CancellationToken> download,
-            Func<DedicatedConflict, bool> confirmConflict = null, Dictionary<string, string> restoredFiles = null)
+            Func<DedicatedConflict, bool> confirmConflict = null, Dictionary<string, string> restoredFiles = null,
+            Func<IReadOnlyList<DedicatedConflict>, bool> confirmRemoval = null)
         {
             RequireGame(gameRoot); ValidateRelease(release);
+            var initialState = Current();
+            var conflicts = InstallConflicts(release, initialState);
+            string approvedState = null;
+            if (conflicts.Count > 0)
+            {
+                if (confirmRemoval == null)
+                    throw new InvalidOperationException(InstallConflictMessage(conflicts));
+                string beforeConsent = Data.Json.Serialize(initialState);
+                cancellation.ThrowIfCancellationRequested();
+                if (!confirmRemoval(conflicts)) throw new OperationCanceledException("기존 전용 캠페인 설치 제거를 취소했습니다.");
+                if (Data.Json.Serialize(Current()) != beforeConsent)
+                    throw new IOException("선택 도중 전용 캠페인 설치 상태가 변경됐습니다. 설치를 다시 확인해 주세요.");
+                approvedState = beforeConsent;
+            }
+            // Removing an overlapping owner later can remove even an identical
+            // reused file. Stage those affected files from the verified ZIP.
+            var atRisk = initialState.installed
+                .Where(c => conflicts.Any(x => x.campaignId == c.id))
+                .SelectMany(c => c.release.files).Select(f => f.path).ToArray();
             var reusable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var ccm = new Library(Path.GetDirectoryName(root)).Current();
             bool activeHere = ccm.active != null && String.Equals(ccm.gameRoot, Path.GetFullPath(gameRoot), StringComparison.OrdinalIgnoreCase);
@@ -374,7 +427,8 @@ namespace CampaignHangar
                 cancellation.ThrowIfCancellationRequested();
                 string path = Target(gameRoot, file.path);
                 bool conflict = activeHere && Overlap(new[] { file.path }, ccm.files.Select(f => f.path)) != null;
-                if (!conflict && File.Exists(path) && new FileInfo(path).Length == file.bytes &&
+                if (!conflict && !atRisk.Any(p => Overlap(new[] { file.path }, new[] { p }) != null) &&
+                    File.Exists(path) && new FileInfo(path).Length == file.bytes &&
                     Data.Hash(path, cancellation, progress == null ? null : new Action<long, long>((done, size) =>
                         progress(new WorkProgress("기존 파일 확인", scanned + done, total, true)))) == file.sha256)
                     reusable.Add(file.path, file.sha256);
@@ -412,7 +466,8 @@ namespace CampaignHangar
                 throw;
             }
             cancellation.ThrowIfCancellationRequested();
-            InstallPrepared(release, manifestHash, paths, gameRoot, progress, cancellation, null, confirmConflict, restoredFiles, reusable);
+            InstallPrepared(release, manifestHash, paths, gameRoot, progress, cancellation, null,
+                confirmConflict, restoredFiles, reusable, confirmRemoval, approvedState);
         }
         void RequireGame(string game)
         {
@@ -426,14 +481,17 @@ namespace CampaignHangar
         }
         public void InstallArchives(DedicatedRelease release, string manifestHash, IList<string> archives, string game,
             Action<WorkProgress> progress, CancellationToken cancellation, Action<int> fault = null,
-            Func<DedicatedConflict, bool> confirmConflict = null, Dictionary<string, string> restoredFiles = null)
+            Func<DedicatedConflict, bool> confirmConflict = null, Dictionary<string, string> restoredFiles = null,
+            Func<IReadOnlyList<DedicatedConflict>, bool> confirmRemoval = null)
         {
-            InstallPrepared(release, manifestHash, archives, game, progress, cancellation, fault, confirmConflict, restoredFiles, null);
+            InstallPrepared(release, manifestHash, archives, game, progress, cancellation, fault,
+                confirmConflict, restoredFiles, null, confirmRemoval, null);
         }
         void InstallPrepared(DedicatedRelease release, string manifestHash, IList<string> archives, string game,
             Action<WorkProgress> progress, CancellationToken cancellation, Action<int> fault,
             Func<DedicatedConflict, bool> confirmConflict, Dictionary<string, string> restoredFiles,
-            Dictionary<string, string> reusable)
+            Dictionary<string, string> reusable, Func<IReadOnlyList<DedicatedConflict>, bool> confirmRemoval,
+            string approvedState)
         {
             RequireGame(game); ValidateRelease(release);
             if (!HashText(manifestHash) || archives.Count != release.packages.Count) throw new InvalidDataException("설치 자료가 누락됐습니다.");
@@ -500,14 +558,82 @@ namespace CampaignHangar
                 }
             }
             if (extracted.Count != release.files.Count) throw new InvalidDataException("ZIP에 필요한 파일이 누락됐습니다.");
+            // All ZIPs are now verified. Only now may a user-approved removal
+            // change the installed state. A canceled or failed download never
+            // removes an existing campaign.
+            var prior = Current();
+            var conflicts = InstallConflicts(release, prior);
+            if (conflicts.Count > 0)
+            {
+                string beforeConsent = Data.Json.Serialize(prior);
+                if (approvedState == null)
+                {
+                    if (confirmRemoval == null)
+                        throw new InvalidOperationException(InstallConflictMessage(conflicts));
+                    cancellation.ThrowIfCancellationRequested();
+                    if (!confirmRemoval(conflicts)) throw new OperationCanceledException("기존 전용 캠페인 설치 제거를 취소했습니다.");
+                    approvedState = beforeConsent;
+                }
+                if (approvedState != beforeConsent || Data.Json.Serialize(Current()) != approvedState)
+                    throw new IOException("확인한 전용 캠페인 설치 상태가 바뀌었습니다. 자동 제거하지 않았습니다.");
+                // Check all selected installed owners before touching the first
+                // one: one edited/blocked owner must not strand a previous
+                // owner in the uninstalled state.
+                var ownedBefore = Owned(prior);
+                var affectedOwners = prior.installed
+                    .Where(c => conflicts.Any(x => x.campaignId == c.id))
+                    .SelectMany(c => c.release.files).Select(f => f.path)
+                    .Distinct(StringComparer.OrdinalIgnoreCase);
+                foreach (var path in affectedOwners)
+                {
+                    string expected;
+                    if (!ownedBefore.TryGetValue(path, out expected) ||
+                        CurrentHash(Target(game, path)) != expected)
+                        throw new IOException("기존 전용 캠페인 파일이 외부에서 변경되어 설치 제거를 진행하지 않았습니다: " + path);
+                }
+                foreach (var conflict in conflicts)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    Uninstall(conflict.campaignId, game);
+                }
+                if (InstallConflicts(release, Current()).Count != 0)
+                    throw new IOException("다른 전용 캠페인과 파일 충돌이 남아 새 설치를 중단했습니다.");
+            }
+            else if (approvedState != null && Data.Json.Serialize(Current()) != approvedState)
+                throw new IOException("설치 상태가 변경되어 승인된 설치를 계속하지 않았습니다.");
             var old = Current();
             var next = Data.Json.Deserialize<DedicatedState>(Data.Json.Serialize(old));
             next.gameRoot = Path.GetFullPath(game);
             next.installed.RemoveAll(c => c.id == release.id);
             next.installed.Add(new DedicatedInstalled { id = release.id, version = release.version, manifestSha256 = manifestHash, release = release });
+            if (release.files.Any(f => VariantPath(f.path))) next.activeVariantId = release.id;
             var affected = release.files.Select(f => f.path).Concat(old.installed.Where(c => c.id == release.id)
                 .SelectMany(c => c.release.files).Select(f => f.path));
             Change(old, next, game, work, cancellation, fault, affected, confirmConflict, progress, restoredFiles, reusable);
+        }
+        internal static List<DedicatedConflict> InstallConflicts(DedicatedRelease release, DedicatedState state)
+        {
+            ValidateRelease(release);
+            var found = new List<DedicatedConflict>();
+            foreach (var installed in state.installed.Where(c => c.id != release.id))
+            {
+                var conflict = (from existing in installed.release.files
+                                from incoming in release.files
+                                where Overlap(new[] { incoming.path }, new[] { existing.path }) != null &&
+                                   (!String.Equals(existing.path, incoming.path, StringComparison.OrdinalIgnoreCase) ||
+                                    !String.Equals(existing.sha256, incoming.sha256, StringComparison.OrdinalIgnoreCase))
+                                select incoming.path).FirstOrDefault();
+                if (conflict != null)
+                    found.Add(new DedicatedConflict(installed.id,
+                        String.IsNullOrWhiteSpace(installed.release.name) ? installed.id : installed.release.name, conflict));
+            }
+            return found;
+        }
+        static string InstallConflictMessage(IReadOnlyList<DedicatedConflict> conflicts)
+        {
+            return "설치된 전용 캠페인과 파일 경로·버전이 겹칩니다: " +
+                String.Join("; ", conflicts.Select(c => c.campaignName + " (" + c.path + ")")) +
+                ". 기존 전용 캠페인을 자동으로 제거하지 않았습니다.";
         }
         public void Uninstall(string id, string game)
         {
@@ -516,12 +642,20 @@ namespace CampaignHangar
             if (!old.installed.Any(c => c.id == id)) return;
             var next = Data.Json.Deserialize<DedicatedState>(Data.Json.Serialize(old));
             next.installed.RemoveAll(c => c.id == id);
+            if (next.activeVariantId == id)
+            {
+                var remainingVariant = next.installed.LastOrDefault(c => c.release.files.Any(f => VariantPath(f.path)));
+                next.activeVariantId = remainingVariant == null ? null : remainingVariant.id;
+            }
             Change(old, next, game, null, CancellationToken.None, null,
                 old.installed.Single(c => c.id == id).release.files.Select(f => f.path));
         }
         static Dictionary<string, string> Owned(DedicatedState state)
         {
             var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (!String.IsNullOrWhiteSpace(state.activeVariantId) &&
+                !state.installed.Any(c => c.id == state.activeVariantId))
+                throw new InvalidDataException("공용 모드 선택 기록이 설치 캠페인과 일치하지 않습니다.");
             foreach (var campaign in state.installed)
             {
                 ValidateRelease(campaign.release);
@@ -529,7 +663,12 @@ namespace CampaignHangar
                 {
                     string hash;
                     if (files.TryGetValue(file.path, out hash) && hash != file.sha256)
-                        throw new InvalidOperationException("다른 전용 캠페인이 같은 공용 파일의 다른 버전을 사용합니다: " + file.path);
+                    {
+                        if (!VariantPath(file.path) || String.IsNullOrWhiteSpace(state.activeVariantId))
+                            throw new InvalidOperationException("다른 전용 캠페인이 같은 공용 파일의 다른 버전을 사용합니다: " + file.path);
+                        if (campaign.id == state.activeVariantId) files[file.path] = file.sha256;
+                        continue;
+                    }
                     files[file.path] = file.sha256;
                 }
             }
@@ -563,6 +702,33 @@ namespace CampaignHangar
                         currentHashes[file.Key] = hash = CurrentHash(Target(game, file.Key));
                     if (hash != file.Value) throw new IOException("재사용할 파일이 확인 후 변경돼 설치를 중단했습니다: " + file.Key);
                 }
+            // A handful of Mass Recall editions share a fixed filename but
+            // require incompatible cinematics bytes. Preserve both SHA-pinned
+            // variants outside the SC2 install before any replacement. Every
+            // other shared-file version conflict remains a hard error.
+            foreach (string path in before.Keys.Concat(after.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!VariantPath(path) || !affected.Contains(path)) continue;
+                string beforeHash, afterHash;
+                before.TryGetValue(path, out beforeHash);
+                after.TryGetValue(path, out afterHash);
+                if (String.Equals(beforeHash, afterHash, StringComparison.OrdinalIgnoreCase)) continue;
+                if (beforeHash != null)
+                {
+                    string live = Target(game, path);
+                    if (CurrentHash(live) != beforeHash)
+                        throw new IOException("공용 모드가 외부에서 수정되어 버전 전환을 중단했습니다: " + path);
+                    RememberVariant(live, beforeHash);
+                }
+                if (afterHash != null)
+                {
+                    string incoming = stage == null ? null : Data.Under(stage, path);
+                    if (incoming != null && File.Exists(incoming)) RememberVariant(incoming, afterHash);
+                    else if (!File.Exists(VariantBackup(afterHash)) ||
+                        Data.Hash(VariantBackup(afterHash)) != afterHash)
+                        throw new IOException("공용 모드의 검증된 보관본이 없어 버전 전환을 중단했습니다. 해당 캠페인을 다시 설치해 주세요: " + path);
+                }
+            }
             var changes = new List<DedicatedChange>();
             var originals = next.originals.ToDictionary(f => f.path, StringComparer.OrdinalIgnoreCase);
             string backupGroup = "originals/" + Guid.NewGuid().ToString("N");
@@ -599,7 +765,11 @@ namespace CampaignHangar
                 if (change.beforeHash != null) Data.Copy(Target(game, change.path), Data.Under(preparation, "before/" + change.path));
                 if (change.afterHash != null)
                 {
-                    string source = after.ContainsKey(change.path) ? Data.Under(stage, change.path) : Data.Under(root, originals[change.path].backup);
+                    string source;
+                    if (!after.ContainsKey(change.path)) source = Data.Under(root, originals[change.path].backup);
+                    else if (stage != null && File.Exists(Data.Under(stage, change.path))) source = Data.Under(stage, change.path);
+                    else if (VariantPath(change.path)) source = VariantBackup(change.afterHash);
+                    else throw new IOException("전용 캠페인 교체 소스 파일이 없습니다: " + change.path);
                     Data.Copy(source, Data.Under(preparation, "after/" + change.path));
                     if (Data.Hash(Data.Under(preparation, "after/" + change.path)) != change.afterHash) throw new IOException("설치 준비 파일의 검증에 실패했습니다.");
                 }
@@ -607,7 +777,7 @@ namespace CampaignHangar
             next.originals = originals.Values.Where(f => after.ContainsKey(f.path)).ToList();
             var journal = new DedicatedJournal { gameRoot = Path.GetFullPath(game), before = old, changes = changes };
             Data.Write(Path.Combine(preparation, "journal.json"), journal);
-            Directory.Move(preparation, transaction);
+            Data.MoveDirectoryWithRetry(preparation, transaction);
             try
             {
                 int count = 0;
@@ -623,7 +793,7 @@ namespace CampaignHangar
                 }
                 Data.Write(statePath, next);
                 journal.committed = true; Data.Write(Path.Combine(transaction, "journal.json"), journal);
-                Directory.Move(transaction, Path.Combine(root, "completed-" + Guid.NewGuid().ToString("N")));
+                Data.MoveDirectoryWithRetry(transaction, Path.Combine(root, "completed-" + Guid.NewGuid().ToString("N")));
             }
             catch { Recover(); throw; }
         }
@@ -651,7 +821,7 @@ namespace CampaignHangar
                 }
                 Data.Write(statePath, journal.before);
             }
-            Directory.Move(transaction, Path.Combine(root, "recovered-" + Guid.NewGuid().ToString("N")));
+            Data.MoveDirectoryWithRetry(transaction, Path.Combine(root, "recovered-" + Guid.NewGuid().ToString("N")));
         }
         static void ReplaceVerified(string source, string destination, string expected)
         {
@@ -681,6 +851,16 @@ namespace CampaignHangar
                 else reapply(restored);
                 saved = Installed(item.id);
                 if (saved == null) throw new IOException("전용 캠페인을 다시 설치하지 못해 실행을 중단했습니다.");
+            }
+            state = Current();
+            if (saved.release.files.Any(f => VariantPath(f.path)) &&
+                !String.Equals(state.activeVariantId, item.id, StringComparison.Ordinal))
+            {
+                ExternalCampaigns.RequireGameClosed(game);
+                var switched = Data.Json.Deserialize<DedicatedState>(Data.Json.Serialize(state));
+                switched.activeVariantId = item.id;
+                Change(state, switched, game, null, CancellationToken.None, null,
+                    saved.release.files.Select(f => f.path), confirmConflict, progress);
             }
             foreach (var file in saved.release.files)
                 if (CurrentHash(Target(game, file.path)) != file.sha256) throw new IOException("설치 파일이 없거나 변경됐습니다. 재설치 전 확인해 주세요: " + file.path);

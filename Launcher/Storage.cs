@@ -111,12 +111,47 @@ namespace CampaignHangar
         // or downloads to a different directory. Tell the user how to retry.
         internal static string AccessDeniedGuidance(string storagePath, string downloadsPath)
         {
-            return "캠페인 보관소 또는 다운로드 폴더에 접근할 권한이 없습니다.\n\n" +
+            return "폴더 접근이 거부되어 경로를 지정하지 못했습니다.\n" +
+                "1. 격납고와 스타2를 닫고, 격납고를 우클릭해 '관리자 권한으로 실행'한 뒤 다시 지정하세요.\n" +
+                "2. 그래도 실패하면 Windows 보안 > 바이러스 및 위협 방지 > 보호 기록에서 " +
+                "차단 여부를 확인하고, 신뢰할 수 있는 격납고 실행 파일만 예외로 허용하세요.\n" +
+                "3. 계속 안 된다면 백신의 실시간 감시를 잠시 끄고 경로 지정만 시험한 후 " +
+                "즉시 다시 켜세요. 검증되지 않은 프로그램은 실행하지 마세요.\n" +
+                "4. 기존 보관소의 폴더 권한이 손상됐다면 원본을 삭제하지 말고 소유자와 권한을 확인하세요.\n\n" +
                 "보관소: " + storagePath + "\n" +
-                "다운로드: " + downloadsPath + "\n\n" +
-                "격납고를 종료한 후 실행 파일을 우클릭하여 '관리자 권한으로 실행'한 뒤 " +
-                "같은 스타2 게임 경로를 다시 선택해 주세요.\n" +
-                "기존 보관소·다운로드 경로와 설정은 다른 위치로 자동 변경하지 않았습니다.";
+                "다운로드: " + downloadsPath + "\n" +
+                "기존 보관소·다운로드 경로·설정은 다른 위치로 자동 변경하지 않았습니다.";
+        }
+        internal static bool IsAccessFailure(Exception error)
+        {
+            if (error == null) return false;
+            if (error is UnauthorizedAccessException) return true;
+            var windows = error as Win32Exception;
+            if (windows != null &&
+                (windows.NativeErrorCode == 5 || windows.NativeErrorCode == 32 || windows.NativeErrorCode == 33))
+                return true;
+            if (error is IOException)
+            {
+                int code = error.HResult & 0xffff;
+                if (code == 5 || code == 32 || code == 33) return true;
+            }
+            var aggregate = error as AggregateException;
+            if (aggregate != null && aggregate.InnerExceptions.Any(IsAccessFailure)) return true;
+            return error.InnerException != null && IsAccessFailure(error.InnerException);
+        }
+        internal static string GamePathFailureGuidance(string gameRoot, string storagePath, string downloadsPath, Exception error)
+        {
+            string cause = error == null ? "원인을 확인하지 못했습니다." : error.Message;
+            return "게임 경로 설정에 실패했습니다.\n" +
+                "오류: " + cause + "\n\n" +
+                "1. 선택한 폴더에 StarCraft II.exe가 있는지 확인하세요.\n" +
+                "2. 격납고를 종료하고 '관리자 권한으로 실행'한 뒤 다시 지정하세요.\n" +
+                "3. 실패가 계속되면 Windows 보안의 보호 기록을 확인해 " +
+                "검증된 격납고 실행 파일만 예외로 허용하세요.\n" +
+                "4. 그래도 안 되면 백신 실시간 감시를 잠시 끄고 다시 시도한 뒤 즉시 다시 켜세요.\n\n" +
+                "선택 게임 경로: " + gameRoot + "\n보관소(유지): " + storagePath +
+                "\n다운로드(유지): " + downloadsPath + "\n" +
+                "기존 경로·캠페인·ZIP 파일은 자동 이동하거나 삭제하지 않았습니다.";
         }
         static string BackupPath(string destination)
         {
@@ -143,6 +178,39 @@ namespace CampaignHangar
             string downloads = configureDownloads ? DefaultDownloadsForGame(gameRoot) : null;
             if (downloads != null) CheckWritable(downloads);
             return Relocate(source, destination, preferenceFile, progress, true, Path.GetFullPath(gameRoot), downloads);
+        }
+        // Selecting the StarCraft II executable is NOT permission to relocate
+        // the campaign library or write Downloads under Program Files. On
+        // normal Windows accounts those default locations are often protected.
+        // Keep every previously selected path intact; storage moves remain an
+        // explicit, separate Settings operation.
+        public static void ConnectGameOnly(string source, string gameRoot, string preferenceFile,
+            string downloadPreferenceFile, string currentDownloads = null)
+        {
+            source = Path.GetFullPath(source).TrimEnd('\\');
+            gameRoot = Path.GetFullPath(gameRoot).TrimEnd('\\');
+            if (!File.Exists(Path.Combine(gameRoot, "StarCraft II.exe")))
+                throw new IOException("StarCraft II.exe가 있는 게임 폴더를 먼저 선택해 주세요.");
+            if (File.Exists(preferenceFile))
+            {
+                var existing = Data.Read<StoragePreference>(preferenceFile);
+                if (!String.IsNullOrWhiteSpace(existing.path) &&
+                    !String.Equals(Path.GetFullPath(existing.path).TrimEnd('\\'), source, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("설정의 보관소 경로가 현재 실행 중인 보관소와 다릅니다. 새로고침 후 다시 시도해 주세요.");
+            }
+            string activeFile = Path.Combine(source, "active.json");
+            var active = File.Exists(activeFile) ? Data.Read<State>(activeFile) : new State();
+            if (active.active != null && !String.IsNullOrWhiteSpace(active.gameRoot) &&
+                !String.Equals(Path.GetFullPath(active.gameRoot).TrimEnd('\\'), gameRoot, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("다른 게임 폴더에 적용 중인 캠페인을 먼저 해제한 뒤 게임 경로를 변경해 주세요.");
+            ValidateGameBoundary(source, source, preferenceFile, gameRoot);
+            // Determine the old effective downloads path before writing the
+            // new game root. Otherwise ResolveDownloads would silently switch
+            // to the new game's protected Downloads directory on next start.
+            string downloads = String.IsNullOrWhiteSpace(currentDownloads)
+                ? ResolveDownloads(downloadPreferenceFile, preferenceFile)
+                : Path.GetFullPath(currentDownloads);
+            Select(source, preferenceFile, gameRoot, downloads);
         }
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         static extern bool GetVolumePathName(string path, StringBuilder volumePath, int length);
@@ -246,13 +314,13 @@ namespace CampaignHangar
             try
             {
                 MoveKept(source, hold, keep);
-                if (backup != null) { Directory.Move(destination, backup); saved = true; }
+                if (backup != null) { Data.MoveDirectoryWithRetry(destination, backup); saved = true; }
                 if (progress != null) progress(new WorkProgress("보관소 폴더 이동 중"));
-                Directory.Move(source, destination); moved = true;
+                Data.MoveDirectoryWithRetry(source, destination); moved = true;
                 MoveKept(hold, source, keep);
                 if (saved && Directory.Exists(Path.Combine(backup, "downloads")))
                 {
-                    Directory.Move(Path.Combine(backup, "downloads"), Path.Combine(destination, "downloads"));
+                    Data.MoveDirectoryWithRetry(Path.Combine(backup, "downloads"), Path.Combine(destination, "downloads"));
                     targetDownloads = true;
                 }
                 if (progress != null) progress(new WorkProgress("경로 설정 저장 중"));
@@ -264,14 +332,14 @@ namespace CampaignHangar
             }
             catch
             {
-                if (targetDownloads) Directory.Move(Path.Combine(destination, "downloads"), Path.Combine(backup, "downloads"));
+                if (targetDownloads) Data.MoveDirectoryWithRetry(Path.Combine(destination, "downloads"), Path.Combine(backup, "downloads"));
                 if (moved)
                 {
                     MoveKept(source, hold, keep);
                     RemoveEmptyDirectories(source);
-                    Directory.Move(destination, source);
+                    Data.MoveDirectoryWithRetry(destination, source);
                 }
-                if (saved) Directory.Move(backup, destination);
+                if (saved) Data.MoveDirectoryWithRetry(backup, destination);
                 MoveKept(hold, source, keep);
                 throw;
             }
@@ -302,7 +370,7 @@ namespace CampaignHangar
                 if (!Directory.Exists(path)) continue;
                 string target = Path.Combine(destination, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(target));
-                Directory.Move(path, target);
+                Data.MoveDirectoryWithRetry(path, target);
             }
         }
         static void RemoveEmptyDirectories(string root)
@@ -430,23 +498,23 @@ namespace CampaignHangar
             {
                 if (backup != null)
                 {
-                    Directory.Move(destination, backup); saved = true;
+                    Data.MoveDirectoryWithRetry(destination, backup); saved = true;
                     if (Directory.Exists(Path.Combine(backup, "downloads")))
                     {
-                        Directory.Move(Path.Combine(backup, "downloads"), Path.Combine(stage, "downloads"));
+                        Data.MoveDirectoryWithRetry(Path.Combine(backup, "downloads"), Path.Combine(stage, "downloads"));
                         downloadsMoved = true;
                     }
                 }
-                Directory.Move(stage, destination); published = true;
+                Data.MoveDirectoryWithRetry(stage, destination); published = true;
                 if (progress != null) progress(new WorkProgress("경로 설정 저장 중"));
                 Select(destination, preferenceFile, gameRoot, downloadsPath);
                 return backup;
             }
             catch
             {
-                if (published) Directory.Move(destination, stage);
-                if (downloadsMoved) Directory.Move(Path.Combine(stage, "downloads"), Path.Combine(backup, "downloads"));
-                if (saved) Directory.Move(backup, destination);
+                if (published) Data.MoveDirectoryWithRetry(destination, stage);
+                if (downloadsMoved) Data.MoveDirectoryWithRetry(Path.Combine(stage, "downloads"), Path.Combine(backup, "downloads"));
+                if (saved) Data.MoveDirectoryWithRetry(backup, destination);
                 throw;
             }
         }

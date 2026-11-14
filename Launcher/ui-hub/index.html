@@ -196,11 +196,13 @@
       </section>
 
       <section class="action-strip" aria-label="선택된 캠페인 작업">
-        <button class="action-button action-primary" id="launchButton" type="button"><span class="action-icon">▶</span> <span id="primaryActionText">캠페인 적용</span> <small>테스트 안내</small></button>
-        <button class="action-button" id="installButton" type="button"><span class="action-icon">⇩</span> 설치·관리 <small>테스트 안내</small></button>
-        <button class="action-button" id="detailButton" type="button"><span class="action-icon">▤</span> 상세 정보 보기</button>
-        <button class="action-button" id="screenshotButton" type="button"><span class="action-icon"></span> 스크린샷 관리</button>
-        <button class="action-button" id="importZipButton" type="button"><span class="action-icon">⇧</span> ZIP 가져오기</button>
+        <button class="action-button action-primary" id="launchButton" type="button" aria-label="캠페인 적용" title="캠페인 적용"><span class="action-icon">▶</span><span class="action-label-full" id="primaryActionText">캠페인 적용</span><span class="action-label-compact" id="primaryActionShort" aria-hidden="true">적용</span><small>테스트 안내</small></button>
+        <button class="action-button" id="installButton" type="button" aria-label="설치·관리" title="설치·관리"><span class="action-icon">⇩</span><span class="action-label-full">설치·관리</span><span class="action-label-compact" aria-hidden="true">설치</span><small>테스트 안내</small></button>
+        <button class="action-button" id="detailButton" type="button" aria-label="상세 정보 보기" title="상세 정보 보기"><span class="action-icon">▤</span><span class="action-label-full">상세 정보 보기</span><span class="action-label-compact" aria-hidden="true">정보</span></button>
+        <button class="action-button" id="screenshotButton" type="button" aria-label="스크린샷 관리" title="스크린샷 관리"><span class="action-icon"></span><span class="action-label-full">스크린샷 관리</span><span class="action-label-compact" aria-hidden="true">스샷</span></button>
+        <button class="action-button" id="reviewButton" type="button" aria-label="리뷰 달기" title="리뷰 달기"><span class="action-icon">▤</span><span class="action-label-full">리뷰 달기</span><span class="action-label-compact" aria-hidden="true">리뷰</span></button>
+        <button class="action-button" id="recommendButton" type="button" aria-label="추천" title="추천"><span class="action-icon">☆</span><span class="action-label-full">추천</span><span class="action-label-compact" aria-hidden="true">추천</span></button>
+        <button class="action-button" id="importZipButton" type="button" aria-label="ZIP 가져오기" title="ZIP 가져오기"><span class="action-icon">⇧</span><span class="action-label-full">ZIP 가져오기</span><span class="action-label-compact" aria-hidden="true">ZIP</span></button>
         <span class="action-rail-label"><b id="actionCaption">QUICK OPERATIONS</b> <span>↘</span></span>
       </section>
 
@@ -209,7 +211,9 @@
           <div class="catalog-heading"><div class="eyebrow" id="catalogEyebrow">MISSION DATABASE / INDEX</div><h3 id="catalogTitle">캠페인 목록 <span id="resultCount">12</span></h3></div>
           <div class="toolbar-inputs">
             <button id="favoriteButton" class="catalog-favorites" type="button" aria-label="즐겨찾기만 보기" title="즐겨찾기만 보기" aria-pressed="false">☆</button>
-            <label class="search-field" for="campaignSearch"><span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.6 15.6 5 5"/></svg></span><input id="campaignSearch" type="search" autocomplete="off" placeholder="캠페인 이름 · 제작자 검색" aria-label="캠페인 검색"><kbd>/</kbd></label>
+            <div class="search-with-hidden"><label class="search-field" for="campaignSearch"><span class="search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.6 15.6 5 5"/></svg></span><input id="campaignSearch" type="search" autocomplete="off" placeholder="캠페인 이름 · 제작자 검색" aria-label="캠페인 검색"><kbd>/</kbd></label>
+            <button id="showHiddenCampaigns" class="catalog-hidden-toggle" type="button" aria-pressed="false" aria-label="숨긴 캠페인 보기" title="숨긴 캠페인 보기"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.7-6.5 10-6.5S22 12 22 12s-3.7 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.8"/></svg><span id="hiddenCampaignCount" class="catalog-hidden-count" hidden>0</span></button>
+            </div>
             <label class="select-field" id="categoryFilter"><span>분류</span><select id="campaignCategory" aria-label="캠페인 분류"><option value="all">전체</option><option value="자날">자날</option><option value="군심">군심</option><option value="공유">공유</option><option value="노바">노바</option><option value="전용">전용</option></select></label>
             <label class="select-field"><span>정렬</span><select id="sortCampaigns" aria-label="정렬"><option value="playtime">플레이 시간순</option><option value="name">이름순</option><option value="popular">인기순</option></select></label>
             <div class="view-mode" role="group" aria-label="목록 표시">
@@ -305,6 +309,20 @@
     <button type="button" id="updateBannerIgnore">무시</button>
   </section>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden><span class="toast-icon">◆</span><span id="toastMessage"></span></div>
+  <div id="recommendationBurst" class="recommendation-burst" aria-hidden="true" hidden></div>
+  <div id="recommendationNotice" class="recommendation-notice" data-phase="working"
+       role="status" aria-live="polite" aria-atomic="true" hidden>
+    <div class="recommendation-notice-card">
+      <div class="recommendation-orbit" aria-hidden="true">
+        <span class="recommendation-orbit-outer"></span><span class="recommendation-orbit-inner"></span>
+        <span id="recommendationGlyph" class="recommendation-orbit-glyph">⌬</span>
+      </div>
+      <span id="recommendationEyebrow" class="recommendation-notice-eyebrow">TACTICAL RECOMMENDATION</span>
+      <strong id="recommendationHeadline" class="recommendation-notice-headline">추천 확인 중</strong>
+      <p id="recommendationDescription" class="recommendation-notice-description">아카이브와 추천 상태를 확인하고 있습니다.</p>
+      <span class="recommendation-notice-line" aria-hidden="true"></span>
+    </div>
+  </div>
   <div id="zipDropOverlay" class="zip-drop-overlay" aria-live="polite" hidden>
     <div class="zip-drop-card"><span aria-hidden="true">⇩</span><strong>캠페인 ZIP 설치·연결</strong>
       <small>파일을 놓으면 기존 설치 검사와 확인 절차가 시작됩니다</small></div>
@@ -313,6 +331,7 @@
     <button type="button" role="menuitem" data-card-action="apply">적용</button>
     <button type="button" role="menuitem" data-card-action="remove">삭제</button>
     <button type="button" role="menuitem" data-card-action="update">업데이트</button>
+    <button type="button" role="menuitem" data-card-action="visibility">캠페인 숨기기</button>
   </div>
   <div class="manage-overlay" id="manageOverlay" hidden>
     <div class="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="manageTitle">
