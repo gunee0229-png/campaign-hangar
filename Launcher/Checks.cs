@@ -752,6 +752,26 @@ namespace CampaignHangar
                 string gameExeHash = Data.Hash(Path.Combine(fixtureGame, "StarCraft II.exe"));
                 string gameStorage = Path.Combine(root, "CampaignStorage");
                 string channelDownloads = Path.Combine(fixtureGame, "Downloads");
+                string blockedParent = Path.Combine(root, "permission-denied-parent-fixture");
+                File.WriteAllText(blockedParent, "must not be replaced by a directory");
+                string protectedLibrary = Path.Combine(blockedParent, "CampaignStorage");
+                string protectedDownloads = Path.Combine(blockedParent, "Downloads");
+                string userFallback = Path.Combine(root, "safe-user-storage");
+                Assert(!Storage.CanWriteAt(protectedLibrary) && !Storage.CanWriteAt(protectedDownloads) &&
+                    Storage.WritableDestination(protectedLibrary, userFallback) == userFallback &&
+                    Storage.WritableDestination(protectedDownloads, userFallback) == userFallback &&
+                    File.ReadAllText(blockedParent) == "must not be replaced by a directory",
+                    "protected game-adjacent storage and Downloads select a user-writable fallback without touching protected paths");
+                Assert(Storage.CanWriteAt(gameStorage) &&
+                    Storage.WritableDestination(gameStorage, userFallback) == gameStorage &&
+                    Storage.DefaultDownloadsForGame(fixtureGame) == channelDownloads,
+                    "writable game-adjacent storage and game Downloads retain existing default behavior");
+                string configuredNoDownloads = Path.Combine(root, "game-with-legacy-download-setting.json");
+                Data.Write(configuredNoDownloads, new StoragePreference {
+                    path = storageTarget, gameRoot = fixtureGame, downloadsPath = null });
+                Assert(Storage.ResolveDownloads(Path.Combine(root, "missing-downloads-preference.json"),
+                    configuredNoDownloads) == Storage.DefaultDownloadsForGame(fixtureGame),
+                    "existing game selection without an explicit ZIP directory also probes writable fallback");
                 Assert(Storage.DefaultForGame(fixtureGame) == gameStorage &&
                     !gameStorage.StartsWith(fixtureGame + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
                     "default library is beside game folder, never inside Battle.net update tree");

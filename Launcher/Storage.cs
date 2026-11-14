@@ -99,7 +99,55 @@ namespace CampaignHangar
             gameRoot = Path.GetFullPath(gameRoot);
             if (!File.Exists(Path.Combine(gameRoot, "StarCraft II.exe")))
                 throw new IOException("StarCraft II.exe가 있는 게임 폴더를 먼저 선택해 주세요.");
-            return Path.Combine(Directory.GetParent(gameRoot.TrimEnd('\\')).FullName, AppChannel.StorageFolder);
+            string besideGame = Path.Combine(Directory.GetParent(gameRoot.TrimEnd('\\')).FullName, AppChannel.StorageFolder);
+            string userStorage = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                AppChannel.Profile, AppChannel.StorageFolder);
+            return WritableDestination(besideGame, userStorage);
+        }
+
+        public static string DefaultDownloadsForGame(string gameRoot)
+        {
+            gameRoot = Path.GetFullPath(gameRoot);
+            string inGame = Path.Combine(gameRoot, AppChannel.DownloadsFolder);
+            string userDownloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                AppChannel.Profile, AppChannel.DownloadsFolder);
+            return WritableDestination(inGame, userDownloads);
+        }
+
+        // When SC2 lives in Program Files or another protected location,
+        // ordinary accounts cannot create a sibling CampaignStorage or a
+        // Downloads directory inside the game. Probe only a temporary file in
+        // the nearest existing directory; never modify game files or ACLs.
+        internal static string WritableDestination(string preferred, string fallback)
+        {
+            return CanWriteAt(preferred) ? preferred : fallback;
+        }
+
+        internal static bool CanWriteAt(string desired)
+        {
+            string existing = Path.GetFullPath(desired);
+            while (!Directory.Exists(existing))
+            {
+                if (File.Exists(existing)) return false;
+                // Directory.Exists can return false for an inaccessible folder,
+                // not just a missing one. Do not mistake its writable parent
+                // for permission to write inside that protected directory.
+                try { File.GetAttributes(existing); return false; }
+                catch (UnauthorizedAccessException) { return false; }
+                catch (FileNotFoundException) { }
+                catch (DirectoryNotFoundException) { }
+                existing = Path.GetDirectoryName(existing);
+                if (String.IsNullOrEmpty(existing)) return false;
+            }
+            string probe = Path.Combine(existing, ".hangar-access-check-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                using (var file = new FileStream(probe, FileMode.CreateNew, FileAccess.Write,
+                    FileShare.None, 1, FileOptions.DeleteOnClose)) file.WriteByte(0);
+                return true;
+            }
+            catch (UnauthorizedAccessException) { return false; }
+            catch (IOException) { return false; }
         }
         static string BackupPath(string destination)
         {
@@ -123,7 +171,7 @@ namespace CampaignHangar
             var active = File.Exists(stateFile) ? Data.Read<State>(stateFile) : new State();
             if (active.active != null && !String.Equals(Path.GetFullPath(active.gameRoot).TrimEnd('\\'), Path.GetFullPath(gameRoot).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                 throw new IOException("다른 게임 폴더에 적용 중인 캠페인을 먼저 해제한 뒤 게임 경로를 변경해 주세요.");
-            string downloads = configureDownloads ? Path.Combine(Path.GetFullPath(gameRoot), AppChannel.DownloadsFolder) : null;
+            string downloads = configureDownloads ? DefaultDownloadsForGame(gameRoot) : null;
             if (downloads != null) CheckWritable(downloads);
             return Relocate(source, destination, preferenceFile, progress, true, Path.GetFullPath(gameRoot), downloads);
         }
@@ -307,7 +355,7 @@ namespace CampaignHangar
                 gameRoot = value.gameRoot;
             }
             return File.Exists(preferenceFile) ? Path.GetFullPath(Data.Read<StoragePreference>(preferenceFile).path)
-                : String.IsNullOrWhiteSpace(gameRoot) ? Path.Combine(LegacyRoot, "downloads") : Path.Combine(Path.GetFullPath(gameRoot), AppChannel.DownloadsFolder);
+                : String.IsNullOrWhiteSpace(gameRoot) ? Path.Combine(LegacyRoot, "downloads") : DefaultDownloadsForGame(gameRoot);
         }
         public static void SelectDownloads(string destination, string preferenceFile, string storagePreferenceFile = null)
         {

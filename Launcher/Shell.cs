@@ -2418,8 +2418,15 @@ namespace CampaignHangar
             try
             {
                 string destination = Storage.DefaultForGame(selectedGame);
+                string selectedDownloads = Storage.DefaultDownloadsForGame(selectedGame);
+                bool fallback = !String.Equals(destination,
+                    Path.Combine(Directory.GetParent(Path.GetFullPath(selectedGame).TrimEnd('\\')).FullName,
+                        AppChannel.StorageFolder), StringComparison.OrdinalIgnoreCase) ||
+                    !String.Equals(selectedDownloads, Path.Combine(selectedGame, AppChannel.DownloadsFolder),
+                        StringComparison.OrdinalIgnoreCase);
                 if (!AppDialog.Confirm(this, "게임 폴더: " + selectedGame + "\n보관소: " + destination +
-                    "\n다운로드: " + Path.Combine(selectedGame, AppChannel.DownloadsFolder) +
+                    "\n다운로드: " + selectedDownloads +
+                    (fallback ? "\n게임 설치 폴더의 쓰기 권한이 제한되어 사용자 폴더를 사용합니다." : "") +
                     "\n\n캠페인 파일을 저장하는 폴더입니다." +
                     "\n캠페인 교체 시 기존 파일을 이곳에 백업합니다." +
                     "\n" + Storage.RelocationDescription(root, destination),

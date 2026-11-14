@@ -434,10 +434,28 @@ namespace CampaignHangar
                 bool reload;
                 do
                 {
-                    using (var form = new Hangar())
+                    try
                     {
-                        Application.Run(form);
-                        reload = form.ReloadRequested;
+                        using (var form = new Hangar())
+                        {
+                            Application.Run(form);
+                            reload = form.ReloadRequested;
+                        }
+                    }
+                    catch (UnauthorizedAccessException error)
+                    {
+                        // Never replace or reset an existing inaccessible library:
+                        // the user's installed campaigns may still be inside it.
+                        string storagePath = "(저장된 경로를 읽을 수 없음)";
+                        try { storagePath = Storage.Resolve(Storage.PreferenceFile); }
+                        catch (Exception) { }
+                        MessageBox.Show("격납고 저장 폴더에 접근할 수 없습니다.\n\n" +
+                            "캠페인 보관소: " + storagePath + "\n\n" +
+                            "해당 폴더에 현재 Windows 계정의 읽기·쓰기 권한이 있는지 확인해 주세요. " +
+                            "게임이 Program Files에 설치된 경우 보관소와 다운로드는 별도 사용자 폴더에 두는 것이 안전합니다.\n\n" +
+                            "기존 보관소와 경로 설정은 변경하지 않았습니다.\n상세: " + error.Message,
+                            "보관소·다운로드 폴더 접근 거부", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return 1;
                     }
                 } while (reload);
             }
