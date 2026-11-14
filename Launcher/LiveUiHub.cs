@@ -565,17 +565,20 @@ namespace CampaignHangar
                    document.getElementById('bootPercent').textContent!=='25%'||
                    document.getElementById('bootWorkAmount').textContent.indexOf('1.0 / 4.0 MB')<0||
                    !document.getElementById('skipBoot').hidden ||
-                   document.getElementById('bootWorkCancel').hidden)return 'measured-bytes';
+                   document.getElementById('bootWorkCancel').hidden||
+                   document.getElementById('bootBrowse').textContent!=='둘러보기')return 'measured-bytes';
                 document.getElementById('bootBrowse').click();
                 if(!document.getElementById('boot').classList.contains('is-compact-work')||
                    document.body.classList.contains('is-booting')||
-                   document.getElementById('bootPercent').textContent!=='25%')return 'browse-retains-progress';
+                   document.getElementById('bootPercent').textContent!=='25%'||
+                   document.getElementById('bootBrowse').textContent!=='크게 보기')return 'browse-retains-progress';
                 u.setWorkProgress({sequence:10001.5,active:true,fullscreen:true,completed:2,total:4});
                 if(!document.getElementById('boot').classList.contains('is-compact-work')||
                    document.getElementById('bootPercent').textContent!=='50%')return 'browse-survives-progress';
                 document.getElementById('bootBrowse').click();
                 if(document.getElementById('boot').classList.contains('is-compact-work')||
-                   !document.body.classList.contains('is-booting'))return 'browse-expand';
+                   !document.body.classList.contains('is-booting')||
+                   document.getElementById('bootBrowse').textContent!=='둘러보기')return 'browse-expand';
                 u.setWorkProgress({sequence:10002,active:true,title:'ZIP unknown total',stage:'Reading',
                     completed:0,total:0,bytes:true,fullscreen:true});
                 if(!document.getElementById('boot').classList.contains('is-indeterminate')||

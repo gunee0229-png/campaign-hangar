@@ -10,14 +10,25 @@
   <link rel="stylesheet" href="ui-refinements.css">
   <link rel="stylesheet" href="ui-usability.css">
   <style>
-    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#071018;}
-    body .boot.progress-window{inset:0;background:none!important;visibility:visible;opacity:1;}
+    html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--bg,#071018);}
+    body .boot.progress-window{inset:0;background:var(--panel,#071018)!important;
+      visibility:visible;opacity:1;border:1px solid var(--edge,#276477);box-sizing:border-box;
+      border-radius:12px;overflow:hidden;}
     .progress-window::before,.progress-window::after{display:none;}
     body .boot.progress-window .boot-center{position:absolute;inset:0;width:100%!important;transform:none;
       max-height:none;height:100%;overflow:auto;padding:54px 18px 14px!important;}
     body .boot.progress-window .boot-headline{font-size:clamp(20px,5vw,30px)!important;}
     .progress-window .boot-subhead{overflow-wrap:anywhere;}
-    .progress-toolbar{position:absolute;top:6px;right:10px;z-index:4;}
+    .progress-toolbar{position:absolute;top:7px;left:12px;right:12px;z-index:5;
+      display:flex;align-items:center;justify-content:space-between;gap:10px;pointer-events:none;}
+    .progress-toolbar button{pointer-events:auto;white-space:nowrap;min-width:74px;
+      border:1px solid var(--edge,#276477);border-radius:5px;background:var(--panel2,#11232c);
+      color:var(--text,#d6e9ed);font-weight:600;}
+    .progress-toolbar button:hover,.progress-toolbar button:focus-visible{
+      border-color:var(--accent,#5bbac2);color:var(--accent-bright,#a2e4ea);}
+    .progress-drag-area{flex:1;align-self:stretch;min-width:20px;min-height:30px;
+      cursor:move;pointer-events:auto;touch-action:none;}
+    .progress-drag-area:focus-visible{outline:2px solid var(--accent,#5bbac2);outline-offset:-2px;}
     @media(max-height:320px){
       body .boot.progress-window .boot-center{padding:36px 10px 10px!important;}
       .progress-window .eyebrow{display:none;}
@@ -25,7 +36,8 @@
       .progress-window .boot-subhead{font-size:10px;margin:4px 0 6px;}
       .progress-window .boot-progress-rail{height:5px!important;margin-top:6px!important;}
       body .boot.progress-window .boot-data{font-size:9px;margin-top:4px!important;}
-      .progress-toolbar .tiny-ghost{font-size:10px;padding:5px 8px;}
+      .progress-toolbar{top:4px;left:9px;right:9px;gap:6px;}
+      .progress-toolbar .tiny-ghost{font-size:10px;padding:5px 8px;min-width:62px;}
       .progress-window .boot-work-amount{font-size:10px;padding-top:5px;}
       .progress-window .boot-work-overall{font-size:9px;padding-top:4px;}
       .progress-window .boot-work-cancel{font-size:10px;padding:4px 10px;margin-top:5px;}
@@ -34,7 +46,11 @@
 </head>
 <body data-theme="terran">
   <main class="boot is-work progress-window" role="status" aria-label="작업 진행">
-    <div class="progress-toolbar"><button type="button" id="expandWork" class="tiny-ghost">크게 보기</button></div>
+    <div class="progress-toolbar" role="group" aria-label="진행창 조작">
+      <button type="button" id="expandWork" class="tiny-ghost" title="전체 화면으로 보기">크게 보기</button>
+      <div id="moveWork" class="progress-drag-area" title="드래그하여 진행창 이동" aria-label="진행창 이동 영역"></div>
+      <button type="button" id="closeWork" class="tiny-ghost" title="작업은 계속 진행하고 진행창만 닫기">닫기</button>
+    </div>
     <div id="progressContent"></div>
   </main>
   <script>
@@ -43,6 +59,10 @@
     var bridge=window.chrome&&window.chrome.webview,root=document.getElementById("progressContent");
     if(!bridge)return;
     document.getElementById("expandWork").addEventListener("click",function(){bridge.postMessage("expand");});
+    document.getElementById("closeWork").addEventListener("click",function(){bridge.postMessage("close");});
+    document.getElementById("moveWork").addEventListener("pointerdown",function(e){
+      if(e.button===0){e.preventDefault();bridge.postMessage("move");}
+    });
     root.addEventListener("click",function(e){
       var button=e.target.closest("#bootWorkCancel");
       if(!button||button.disabled)return;

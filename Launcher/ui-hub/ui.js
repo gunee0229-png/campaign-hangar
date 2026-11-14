@@ -72,7 +72,7 @@
   var bootFrame = null, toastTimer = null;
   var liveDataReceived = false, registeredCount = 12, installedOnly = false;
   var themeSwitchSerial=0,viewHistory=[];
-  var hostWorkActive=false,hostWorkDisplayed=false,hostWorkSequence=-1,hostWorkId=0;
+  var hostWorkActive=false,hostWorkDisplayed=false,hostWorkSequence=-1,hostWorkId=0,hostWorkDismissedId=-1;
   // New installations start fullscreen. A user's saved *work-only* preference
   // changes future work displays, never race-switch or startup animations.
   var workBrowsing=false,workBrowseDefault=false;
@@ -85,13 +85,26 @@
       colors["--"+key]=style.getPropertyValue("--"+key).trim();
     });
     sendHost("work-window-state:"+JSON.stringify({html:document.querySelector(".boot-center").outerHTML,
-      theme:state.theme,colors:colors,rect:workInitialRect,
+      theme:state.theme,colors:colors,rect:workInitialRect,workId:hostWorkId,
       indeterminate:el("boot").classList.contains("is-indeterminate")}));
   }
   function workWindowAttached(attached){
     el("boot").classList.toggle("is-native-work",!!attached&&hostWorkActive&&workBrowsing);
   }
+  function dismissWorkWindow(){
+    if(!hostWorkActive)return false;
+    hostWorkDismissedId=hostWorkId;
+    hostWorkDisplayed=false;
+    el("boot").classList.remove("is-work","is-compact-work","is-native-work");
+    el("boot").classList.add("is-hidden");
+    el("bootWorkToolbar").hidden=true;
+    document.body.classList.remove("is-booting","work-browsing");
+    if(window.HangarFeatures)window.HangarFeatures.resumeArchive();
+    toast("진행창을 닫았습니다. 작업은 계속 진행됩니다.");
+    return true;
+  }
   function showWorkBrowse(value){
+    if(!value)hostWorkDismissedId=-1;
     workBrowsing=!!value;
     if(el("boot").classList.contains("is-compact-work")===workBrowsing&&
        document.body.classList.contains("is-booting")!==workBrowsing)return;
@@ -122,12 +135,16 @@
     if(data.workId!==undefined){
       var workId=Number(data.workId);
       if(!Number.isSafeInteger(workId)||workId<hostWorkId)return false;
-      if(workId!==hostWorkId)workBrowsing=!!data.browse;
+      if(workId!==hostWorkId){
+        workBrowsing=!!data.browse;
+        hostWorkDismissedId=-1;
+      }
       hostWorkId=workId;
     }
     hostWorkSequence=Number(data.sequence);
     hostWorkActive=!!data.active;
     if(!hostWorkActive){
+      hostWorkDismissedId=-1;
       if(hostWorkDisplayed){
         hostWorkDisplayed=false;
         workWindowAttached(false);
@@ -147,6 +164,7 @@
       }
       return true;
     }
+    if(hostWorkDismissedId===hostWorkId)return true;
     if(!data.fullscreen){
       if(hostWorkDisplayed){hostWorkDisplayed=false;el("boot").classList.add("is-hidden");
         el("boot").classList.remove("is-work","is-compact-work");
@@ -1183,7 +1201,7 @@
     replayBoot:replayBoot,finishBoot:finishBoot,mode:setMode,getState:function(){return state;},
     setRealCampaigns:setRealCampaigns,setFavoriteIds:setFavoriteIds,navigateBack:navigateBack,
     setActivationState:setActivationState,setWorkProgress:setWorkProgress,
-    workWindowAttached:workWindowAttached,
+    workWindowAttached:workWindowAttached,dismissWorkWindow:dismissWorkWindow,
     showWorkFullScreen:function(){showWorkBrowse(false);},
     setActivityTotals:setActivityTotals,setUpdateNotice:setUpdateNotice,
     revealCampaign:revealCampaign,
