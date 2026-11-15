@@ -488,6 +488,12 @@ namespace CampaignHangar
                             reload = form.ReloadRequested;
                         }
                     }
+                    catch (ActivityStore.StartupCanceledException)
+                    {
+                        // The user explicitly chose not to exclude a damaged
+                        // play-records file. Leave everything untouched.
+                        return 0;
+                    }
                     catch (Exception error)
                     {
                         if (!Storage.IsAccessFailure(error)) throw;

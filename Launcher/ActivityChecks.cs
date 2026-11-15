@@ -33,12 +33,87 @@ namespace CampaignHangar
                     "<Key name=\"" + m + "\"><Value int=\"1\"/></Key>")) + "</Section>" +
                 "<Section name=\"WCampaign|MissionBestTime\"><Key name=\"NotCompleted-4\"><Value int=\"10\"/></Key></Section></Bank>";
         }
+        static void VerifyRecordRecovery(string root)
+        {
+            string goodRoot = Path.Combine(root, "record-recovery-valid");
+            Directory.CreateDirectory(goodRoot);
+            var original = new ActivityStore(goodRoot);
+            original.ObserveTime("review-campaign", "review-process", 0);
+            original.ObserveTime("review-campaign", "review-process", 70);
+            original.Flush();
+            string file = Path.Combine(goodRoot, "play-records.json");
+            string lastGood = file + ".last-good";
+            Check(File.Exists(lastGood) && Data.Hash(lastGood) == Data.Hash(file),
+                "successful playtime save retains separate matching last-good snapshot");
+            File.WriteAllText(file, "{truncated-json");
+            string brokenHash = Data.Hash(file);
+            bool asked = false;
+            string notice = null;
+            var repaired = ActivityStore.OpenForStartup(goodRoot,
+                question => { asked = true; return false; }, message => notice = message);
+            string[] damaged = Directory.GetFiles(goodRoot, "play-records.damaged-*.json");
+            Check(!asked && notice != null && repaired.Snapshot("review-campaign").seconds == 70 &&
+                damaged.Length == 1 && Data.Hash(damaged[0]) == brokenHash &&
+                Data.Hash(lastGood) == Data.Hash(file),
+                "damaged primary is recovered from validated last-good; damaged bytes preserved, no exclusion prompt");
+
+            string declinedRoot = Path.Combine(root, "record-recovery-declined");
+            Directory.CreateDirectory(declinedRoot);
+            string declinedFile = Path.Combine(declinedRoot, "play-records.json");
+            File.WriteAllText(declinedFile, "{truncated-json");
+            string declinedHash = Data.Hash(declinedFile);
+            bool prompted = false, canceled = false;
+            try
+            {
+                ActivityStore.OpenForStartup(declinedRoot,
+                    question => { prompted = question.Contains("기록 없이 시작할까요"); return false; }, message => { });
+            }
+            catch (ActivityStore.StartupCanceledException) { canceled = true; }
+            Check(prompted && canceled && Data.Hash(declinedFile) == declinedHash &&
+                Directory.GetFiles(declinedRoot, "play-records.damaged-*.json").Length == 0,
+                "declining exclusion exits without changing damaged play records");
+            string excludedNotice = null;
+            var excluded = ActivityStore.OpenForStartup(declinedRoot, question => true, message => excludedNotice = message);
+            damaged = Directory.GetFiles(declinedRoot, "play-records.damaged-*.json");
+            Check(!File.Exists(declinedFile) && excludedNotice != null &&
+                damaged.Length == 1 && Data.Hash(damaged[0]) == declinedHash &&
+                excluded.TotalSeconds == 0,
+                "confirmed exclusion preserves damaged original and starts with empty in-memory records");
+            excluded.ObserveTime("after-exclusion", "process", 0);
+            excluded.ObserveTime("after-exclusion", "process", 90);
+            Check(new ActivityStore(declinedRoot).Snapshot("after-exclusion").seconds == 90 &&
+                Data.Hash(damaged[0]) == declinedHash, "new playtime saves independently; preserved damaged file unchanged");
+
+            string invalidRoot = Path.Combine(root, "record-recovery-invalid-backup");
+            Directory.CreateDirectory(invalidRoot);
+            string invalidFile = Path.Combine(invalidRoot, "play-records.json");
+            File.WriteAllText(invalidFile, "{truncated-primary");
+            File.WriteAllText(invalidFile + ".last-good", "{truncated-backup");
+            var originalInvalidHash = Data.Hash(invalidFile);
+            bool invalidPrompt = false;
+            var started = ActivityStore.OpenForStartup(invalidRoot,
+                question => { invalidPrompt = true; return true; }, message => { });
+            Check(invalidPrompt && started.TotalSeconds == 0 &&
+                Directory.GetFiles(invalidRoot, "play-records.damaged-*.json").Length == 1 &&
+                Data.Hash(invalidFile + ".last-good") != originalInvalidHash,
+                "unreadable last-good never silently restores; asks before excluding primary");
+
+            string oldRoot = Path.Combine(root, "record-recovery-legacy");
+            Directory.CreateDirectory(oldRoot);
+            string oldFile = Path.Combine(oldRoot, "play-records.json");
+            File.WriteAllText(oldFile, "[{\"id\":\"old-record\",\"seconds\":12,\"missions\":1,\"clears\":0}]");
+            var legacy = new ActivityStore(oldRoot).Snapshot("old-record");
+            Check(legacy.seconds == 12 && legacy.seenMissions.Count == 0 && legacy.completed.Count == 0,
+                "valid older records with absent optional collections are normalized, not treated as corruption");
+            Console.WriteLine("ACTIVITY RECOVERY COMPLETE: isolated backup restore, explicit exclude/decline, legacy records.");
+        }
         public static void Run(string root)
         {
             if (Directory.Exists(root)) throw new InvalidOperationException("Activity checks require a new isolated directory.");
             Directory.CreateDirectory(root);
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
             Console.WriteLine("ACTIVITY isolated root: " + root);
+            VerifyRecordRecovery(root);
             string bank = Path.Combine(root, "RLO8D26WCampaign.SC2Bank");
             File.WriteAllText(bank, Bank(4, "TRaynor01", true, "TRaynor01"));
             string originalBank = Data.Hash(bank);

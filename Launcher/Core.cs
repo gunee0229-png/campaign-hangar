@@ -812,9 +812,29 @@ namespace CampaignHangar
             {
                 var entries = archive.Entries.Where(e => String.Equals(e.Name, "metadata.txt", StringComparison.OrdinalIgnoreCase)).ToList();
                 if (entries.Count != 1 || entries[0].Length > 1024 * 1024) throw new InvalidDataException("1MiB 이하 metadata.txt가 정확히 한 개 있는 CCM ZIP이 필요합니다.");
-                using (var reader = new StreamReader(entries[0].Open(), Encoding.UTF8))
+                // ZipArchiveEntry.Length is metadata supplied by the ZIP, not a
+                // limit enforced by the decompressor. Bound the bytes we read,
+                // including when the central directory lies about file size.
+                using (var input = entries[0].Open())
+                using (var buffer = new MemoryStream())
                 {
-                    var item = ReadMetadata(reader); item.sourceFileName = Path.GetFileName(zip); return item;
+                    var bytes = new byte[8192];
+                    long readBytes = 0;
+                    int count;
+                    while ((count = input.Read(bytes, 0, bytes.Length)) > 0)
+                    {
+                        readBytes += count;
+                        if (readBytes > 1024 * 1024 || readBytes > entries[0].Length)
+                            throw new InvalidDataException("ZIP의 metadata.txt 실제 크기가 선언된 크기 또는 1MiB 제한을 초과합니다.");
+                        buffer.Write(bytes, 0, count);
+                    }
+                    if (readBytes != entries[0].Length)
+                        throw new InvalidDataException("ZIP의 metadata.txt 크기 정보가 일치하지 않습니다.");
+                    buffer.Position = 0;
+                    using (var reader = new StreamReader(buffer, Encoding.UTF8))
+                    {
+                        var item = ReadMetadata(reader); item.sourceFileName = Path.GetFileName(zip); return item;
+                    }
                 }
             }
         }
@@ -874,7 +894,11 @@ namespace CampaignHangar
             using (var archive = ZipFile.OpenRead(Data.IoPath(zipPath)))
             {
                 if (archive.Entries.Count > 100000) throw new InvalidDataException("ZIP 항목이 너무 많습니다.");
-                long expanded = 0;
+                var metadataEntries = archive.Entries.Where(e => String.Equals(e.Name, "metadata.txt", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (metadataEntries.Count != 1 || metadataEntries[0].Length > 1024 * 1024)
+                    throw new InvalidDataException("1MiB 이하 metadata.txt가 정확히 한 개 있는 CCM ZIP이 필요합니다.");
+                const long expandedLimit = 16L * 1024 * 1024 * 1024;
+                long declared = 0, expanded = 0;
                 int extracted = 0;
                 int extractCount = archive.Entries.Count(entry => !String.IsNullOrEmpty(entry.Name));
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -882,11 +906,35 @@ namespace CampaignHangar
                 {
                     string destination = Data.Under(payload, entry.FullName);
                     if (!seen.Add(destination)) throw new InvalidDataException("ZIP에 중복 경로가 있습니다.");
-                    expanded = checked(expanded + entry.Length);
-                    if (expanded > 16L * 1024 * 1024 * 1024) throw new InvalidDataException("ZIP 해제 크기가 16GiB를 초과합니다.");
-                    if (String.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(Data.IoPath(destination)); continue; }
+                    if (entry.Length < 0 || entry.Length > expandedLimit - declared)
+                        throw new InvalidDataException("ZIP 해제 크기가 16GiB를 초과합니다.");
+                    declared += entry.Length;
+                    if (String.IsNullOrEmpty(entry.Name))
+                    {
+                        if (entry.Length != 0) throw new InvalidDataException("ZIP 폴더의 크기 정보가 올바르지 않습니다.");
+                        Directory.CreateDirectory(Data.IoPath(destination));
+                        continue;
+                    }
                     Directory.CreateDirectory(Data.IoPath(Path.GetDirectoryName(destination)));
-                    entry.ExtractToFile(Data.IoPath(destination), false);
+                    using (var input = entry.Open())
+                    using (var output = new FileStream(Data.IoPath(destination), FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        var bytes = new byte[128 * 1024];
+                        long extractedBytes = 0;
+                        int count;
+                        while ((count = input.Read(bytes, 0, bytes.Length)) > 0)
+                        {
+                            if (count > entry.Length - extractedBytes || count > expandedLimit - expanded ||
+                                (String.Equals(entry.Name, "metadata.txt", StringComparison.OrdinalIgnoreCase) &&
+                                 count > 1024 * 1024 - extractedBytes))
+                                throw new InvalidDataException("ZIP 파일의 실제 해제 크기가 선언값 또는 안전 한도를 초과합니다: " + entry.FullName);
+                            output.Write(bytes, 0, count);
+                            extractedBytes += count;
+                            expanded += count;
+                        }
+                        if (extractedBytes != entry.Length)
+                            throw new InvalidDataException("ZIP 파일의 실제 해제 크기와 선언값이 다릅니다: " + entry.FullName);
+                    }
                     if (progress != null) progress(new WorkProgress("ZIP 압축 해제 중", ++extracted, extractCount));
                 }
             }

@@ -195,6 +195,53 @@ namespace CampaignHangar
             string traversal=Zip(root,"traversal","bad",true);
             Reject(()=>library.Import(traversal,"payload-traversal"),"path traversal remains rejected");
             Assert(!File.Exists(Path.Combine(root,"escaped.txt")),"rejected archive cannot escape its stage");
+
+            string largeMetadata = Path.Combine(root, "oversize-metadata.zip");
+            using (var archive = ZipFile.Open(largeMetadata, ZipArchiveMode.Create))
+            using (var writer = new StreamWriter(archive.CreateEntry("metadata.txt").Open()))
+                writer.Write("title=limit-test\ncampaign=wol\ndesc=" + new string('x', 1024 * 1024 + 10));
+            bool inspectSizeRejected = false, importSizeRejected = false;
+            try { Library.InspectZip(largeMetadata); }
+            catch (InvalidDataException error) { inspectSizeRejected = error.Message.Contains("1MiB"); }
+            try { library.Import(largeMetadata, "metadata-size-direct"); }
+            catch (InvalidDataException error) { importSizeRejected = error.Message.Contains("1MiB"); }
+            Assert(inspectSizeRejected && importSizeRejected && library.Installed("metadata-size-direct") == null,
+                "InspectZip and direct Import both enforce 1MiB metadata boundary without publishing a version");
+
+            string forged = Path.Combine(root, "central-size-forged.zip");
+            using (var archive = ZipFile.Open(forged, ZipArchiveMode.Create))
+            {
+                using (var writer = new StreamWriter(archive.CreateEntry("wrapper/metadata.txt").Open()))
+                    writer.Write("title=forged fixture\ncampaign=wol\nversion=0.0\n");
+                using (var output = archive.CreateEntry("wrapper/forged.SC2Map").Open())
+                {
+                    var repeated = Enumerable.Repeat((byte)'A', 65536).ToArray();
+                    for (int i = 0; i < 32; i++) output.Write(repeated, 0, repeated.Length);
+                }
+            }
+            byte[] raw = File.ReadAllBytes(forged);
+            int changed = 0;
+            for (int at = 0; at <= raw.Length - 46; at++)
+            {
+                if (raw[at] != 0x50 || raw[at + 1] != 0x4b || raw[at + 2] != 0x01 || raw[at + 3] != 0x02) continue;
+                int length = BitConverter.ToUInt16(raw, at + 28);
+                if (at + 46 + length > raw.Length) continue;
+                if (System.Text.Encoding.UTF8.GetString(raw, at + 46, length) != "wrapper/forged.SC2Map") continue;
+                BitConverter.GetBytes((uint)1).CopyTo(raw, at + 24);
+                changed++;
+            }
+            Assert(changed == 1, "test ZIP central directory declared-size field changed for exactly one fixture file");
+            File.WriteAllBytes(forged, raw);
+            string forgedHash = Data.Hash(forged);
+            using (var archive = ZipFile.OpenRead(forged))
+                Assert(archive.GetEntry("wrapper/forged.SC2Map").Length == 1,
+                    "forged ZIP advertises 1 byte despite containing a 2MiB deflate stream");
+            bool forgedRejected = false;
+            try { library.Import(forged, "forged-size-direct"); }
+            catch (InvalidDataException error) { forgedRejected = error.Message.Contains("실제 해제 크기"); }
+            Assert(forgedRejected && library.Installed("forged-size-direct") == null && Data.Hash(forged) == forgedHash &&
+                Directory.GetDirectories(library.Root, "import-*", SearchOption.TopDirectoryOnly).Length == 0,
+                "direct CCM Import rejects false ZIP lengths; no version published, staging cleaned, ZIP unchanged");
             if(sourceZip!=null)
             {
                 string originalHash=Data.Hash(sourceZip);

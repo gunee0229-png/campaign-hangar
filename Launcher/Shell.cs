@@ -105,7 +105,11 @@ namespace CampaignHangar
                 BackColor = GlassTheme.Background;
                 ForeColor = GlassTheme.Text;
             }
-            externalCampaigns = new ExternalCampaigns(root); activity = new ActivityStore(root);
+            externalCampaigns = new ExternalCampaigns(root);
+            activity = ActivityStore.OpenForStartup(root,
+                question => MessageBox.Show(question, "플레이 기록 복구 · 선택 필요",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes,
+                message => MessageBox.Show(message, "플레이 기록 복구 결과", MessageBoxButtons.OK, MessageBoxIcon.Information));
             dedicatedLibrary = new DedicatedLibrary(root);
             preferenceFile = isolated ? Path.Combine(root + "-profile", "storage.json") : Storage.PreferenceFile;
             downloadPreferenceFile = isolated ? Path.Combine(root + "-profile", "downloads.json") : Storage.DownloadPreferenceFile;

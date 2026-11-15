@@ -86,11 +86,87 @@ namespace CampaignHangar
         string previousId, previousProcess;
         double previousClock, pending;
         bool hasClock;
+        public sealed class StartupCanceledException : OperationCanceledException
+        {
+            public StartupCanceledException() : base("플레이 기록 복구·제외를 취소했습니다. 원본 기록은 그대로 보존했습니다.") { }
+        }
+        static Dictionary<string, PlayRecord> LoadRecords(string path)
+        {
+            var entries = Data.Read<List<PlayRecord>>(path);
+            if (entries == null) throw new InvalidDataException("플레이 기록 목록이 비어 있습니다.");
+            var loaded = new Dictionary<string, PlayRecord>(StringComparer.Ordinal);
+            foreach (var record in entries)
+            {
+                if (record == null || String.IsNullOrWhiteSpace(record.id) ||
+                    Double.IsNaN(record.seconds) || Double.IsInfinity(record.seconds) || record.seconds < 0 ||
+                    record.missions < 0 || record.clears < 0 || record.lastInstance < 0 ||
+                    loaded.ContainsKey(record.id))
+                    throw new InvalidDataException("플레이 기록에 비어 있거나 중복된 캠페인, 잘못된 누적 수치가 있습니다.");
+                // Older records may not contain either collection. Keep their
+                // other fields instead of discarding a valid legacy record.
+                if (record.seenMissions == null) record.seenMissions = new List<string>();
+                if (record.completed == null) record.completed = new List<string>();
+                loaded.Add(record.id, record);
+            }
+            return loaded;
+        }
+        static bool CorruptRecordData(Exception error)
+        {
+            // Access denied, sharing errors, missing storage and disk IO are
+            // NOT corruption: never offer to discard records for those.
+            return error is InvalidDataException || error is ArgumentException ||
+                error is FormatException || error is InvalidOperationException;
+        }
+        static string DamagedRecordPath(string file)
+        {
+            return Path.Combine(Path.GetDirectoryName(file), "play-records.damaged-" +
+                DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N") + ".json");
+        }
+        public static ActivityStore OpenForStartup(string root, Func<string, bool> confirmExclude, Action<string> notify)
+        {
+            string primary = Path.Combine(root, "play-records.json");
+            try { return new ActivityStore(root); }
+            catch (Exception error)
+            {
+                if (!CorruptRecordData(error) || !File.Exists(primary)) throw;
+                string backup = primary + ".last-good";
+                if (File.Exists(backup))
+                {
+                    try
+                    {
+                        var good = LoadRecords(backup);
+                        string preserved = DamagedRecordPath(primary);
+                        File.Copy(primary, preserved, false);
+                        Data.Write(primary, good.Values.OrderBy(r => r.id).ToList());
+                        var recovered = new ActivityStore(root);
+                        if (notify != null) notify("플레이 기록 파일이 손상되어 마지막 정상 사본에서 복구했습니다.\n\n" +
+                            "원본 손상 파일은 삭제하지 않고 다음 위치에 보관했습니다:\n" + preserved);
+                        return recovered;
+                    }
+                    catch (Exception restoreError)
+                    {
+                        System.Diagnostics.Trace.WriteLine("Play records last-good recovery unavailable: " + restoreError.Message);
+                        // Ask before excluding, rather than silently starting
+                        // with no completion/playtime history.
+                    }
+                }
+                string question = "플레이 기록 파일을 읽지 못했고 정상 사본으로도 복구하지 못했습니다.\n\n" +
+                    "손상된 기록을 안전한 다른 이름으로 보존하고, 이번에는 기록 없이 시작할까요?\n" +
+                    "기존 게임·뱅크·세이브·설치 목록은 변경하지 않습니다.\n\n" +
+                    "예: 손상 기록을 제외하고 시작\n아니오: 원본을 유지하고 종료";
+                if (confirmExclude == null || !confirmExclude(question)) throw new StartupCanceledException();
+                string excluded = DamagedRecordPath(primary);
+                File.Move(primary, excluded);
+                var empty = new ActivityStore(root);
+                if (notify != null) notify("손상된 플레이 기록을 제외하고 시작합니다.\n\n" +
+                    "기록 원본은 삭제하지 않고 보존했습니다:\n" + excluded);
+                return empty;
+            }
+        }
         public ActivityStore(string root)
         {
             file = Path.Combine(root, "play-records.json");
-            records = (File.Exists(file) ? Data.Read<List<PlayRecord>>(file) : new List<PlayRecord>())
-                .ToDictionary(r => r.id, StringComparer.Ordinal);
+            records = File.Exists(file) ? LoadRecords(file) : new Dictionary<string, PlayRecord>(StringComparer.Ordinal);
         }
         PlayRecord Item(string id)
         {
@@ -98,7 +174,17 @@ namespace CampaignHangar
             if (!records.TryGetValue(id, out value)) { value = new PlayRecord { id = id }; records.Add(id, value); }
             return value;
         }
-        void Save() { Data.Write(file, records.Values.OrderBy(r => r.id).ToList()); pending = 0; }
+        void Save()
+        {
+            var snapshot = records.Values.OrderBy(r => r.id).ToList();
+            Data.Write(file, snapshot);
+            pending = 0;
+            // A separate atomic last-good copy makes recovery possible even
+            // when the primary JSON is later truncated or externally damaged.
+            try { Data.Write(file + ".last-good", snapshot); }
+            catch (IOException error) { System.Diagnostics.Trace.WriteLine("Play records backup: " + error.Message); }
+            catch (UnauthorizedAccessException error) { System.Diagnostics.Trace.WriteLine("Play records backup: " + error.Message); }
+        }
         public PlayRecord Snapshot(string id)
         {
             lock (sync)
