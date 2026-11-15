@@ -90,6 +90,22 @@ namespace CampaignHangar
             managed = new List<OwnedFile>();
         }
     }
+    // Read-only diagnosis. Recovery is a separate, explicitly confirmed action.
+    public sealed class ActiveRepairInspection
+    {
+        public string campaign { get; set; }
+        public string gameRoot { get; set; }
+        public bool canRepair { get; set; }
+        public string blockedReason { get; set; }
+        public List<string> missing { get; set; }
+        public List<string> changed { get; set; }
+        public ActiveRepairInspection()
+        {
+            missing = new List<string>();
+            changed = new List<string>();
+        }
+        public int IssueCount { get { return missing.Count + changed.Count; } }
+    }
     public sealed class Journal
     {
         public string gameRoot { get; set; }
@@ -451,6 +467,206 @@ namespace CampaignHangar
                 .Where(File.Exists).Select(p => Data.Read<Campaign>(p)).ToList();
         }
         public State Current() { return File.Exists(statePath) ? Data.Read<State>(statePath) : new State(); }
+
+        // A missing active metadata.txt normally has no interrupted transaction
+        // journal. The original "실패한 전환 복구" therefore has nothing to
+        // replay, while activation/removal continues rejecting the missing file.
+        // Inspect both cases without changing a single game or library file.
+        public ActiveRepairInspection InspectActiveRepair()
+        {
+            var state = Current();
+            var result = new ActiveRepairInspection { campaign = state.active, gameRoot = state.gameRoot };
+            if (Directory.Exists(transaction))
+            {
+                result.blockedReason = File.Exists(Path.Combine(transaction, "journal.json"))
+                    ? "미완료 전환이 있습니다. 먼저 '실패한 전환 복구'를 실행하세요."
+                    : "작업 폴더에 복구 기록이 없습니다. 임의 삭제하지 말고 보관소를 확인해 주세요.";
+                return result;
+            }
+            if (String.IsNullOrWhiteSpace(state.active))
+            {
+                result.blockedReason = "현재 적용 중인 CCM 캠페인이 없습니다.";
+                return result;
+            }
+            if (String.IsNullOrWhiteSpace(state.gameRoot) ||
+                !File.Exists(Path.Combine(state.gameRoot, "StarCraft II.exe")))
+            {
+                result.blockedReason = "기록된 게임 위치를 찾을 수 없습니다. 게임 경로를 먼저 확인하세요.";
+                return result;
+            }
+            var versions = Versions(state.active);
+            var item = versions.SingleOrDefault(v => v.versionKey == state.versionKey);
+            if (item == null || state.files == null || state.managed == null ||
+                state.originals == null || state.managed.Count == 0)
+            {
+                result.blockedReason = "기존 캠페인의 보관 버전이나 적용 기록이 불완전합니다. 자동 복구하지 않습니다.";
+                return result;
+            }
+            var manifestFiles = DeploymentFiles(item.files ?? new List<OwnedFile>());
+            var manifestIndex = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in manifestFiles)
+            {
+                Target(state.gameRoot, f.path);
+                if (manifestIndex.ContainsKey(f.path))
+                {
+                    result.blockedReason = "보관 파일 목록에 중복 경로가 있습니다.";
+                    return result;
+                }
+                manifestIndex.Add(f.path, f.hash);
+            }
+            if (state.files.Count != manifestFiles.Count ||
+                state.files.Any(f => f == null || !manifestIndex.ContainsKey(f.path) ||
+                    !String.Equals(manifestIndex[f.path], f.hash, StringComparison.OrdinalIgnoreCase)))
+            {
+                result.blockedReason = "적용 기록과 보관된 캠페인 버전이 일치하지 않습니다.";
+                return result;
+            }
+            var containers = new HashSet<string>(state.files.Select(f => Container(f.path)), StringComparer.OrdinalIgnoreCase);
+            if (containers.Count != state.managed.Count ||
+                state.managed.Select(f => f == null ? null : f.path)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count() != state.managed.Count ||
+                state.managed.Any(f => f == null || !containers.Contains(f.path) || f.hash == null))
+            {
+                result.blockedReason = "관리 중인 맵·모드 경로 기록이 불완전합니다.";
+                return result;
+            }
+            foreach (var entry in state.managed)
+            {
+                var path = Target(state.gameRoot, entry.path);
+                var actual = Node(path, entry.path);
+                if (!String.Equals(actual.hash, entry.hash, StringComparison.OrdinalIgnoreCase) ||
+                    actual.directory != entry.directory)
+                {
+                    if (actual.hash == null) result.missing.Add(entry.path);
+                    else result.changed.Add(entry.path);
+                }
+            }
+            result.canRepair = result.IssueCount > 0;
+            return result;
+        }
+
+        // Finds exact bytes inside the immutable imported ZIP payload. In the
+        // move-based installer the separate "deploy" file is intentionally
+        // absent while active, so it must never be used as recovery evidence.
+        static string ArchivedActiveFile(string payload, OwnedFile expected, string[] candidates,
+            Dictionary<string, string> hashCache)
+        {
+            string name = Path.GetFileName(expected.path);
+            foreach (var file in candidates)
+            {
+                if (!String.Equals(Path.GetFileName(file), name, StringComparison.OrdinalIgnoreCase) ||
+                    new FileInfo(Data.IoPath(file)).Length > 16L * 1024 * 1024 * 1024) continue;
+                string hash;
+                if (!hashCache.TryGetValue(file, out hash))
+                {
+                    hash = Data.Hash(file);
+                    hashCache[file] = hash;
+                }
+                if (String.Equals(hash, expected.hash, StringComparison.OrdinalIgnoreCase))
+                    return file;
+            }
+            throw new InvalidDataException("보관된 원본 ZIP 자료에서 일치하는 복구 파일을 찾지 못했습니다: " + expected.path);
+        }
+
+        // Repairs only an active, independently hash-pinned CCM deployment.
+        // Unexpected user edits/extra files are MOVED to a retained local backup
+        // with a journal, never overwritten or silently discarded. Failed
+        // moves roll back to the exact pre-repair (possibly broken) state.
+        public string RepairActiveFiles(Action<int> fault = null)
+        {
+            var result = InspectActiveRepair();
+            if (!result.canRepair)
+                throw new InvalidOperationException(result.blockedReason ??
+                    "복구할 변경·누락 파일이 없거나 적용 정보가 올바르지 않습니다.");
+            var state = Current();
+            ExternalCampaigns.RequireGameClosed(state.gameRoot);
+            if (Directory.Exists(transaction))
+                throw new InvalidOperationException("복구 대기 중인 전환이 있어 자가 복구를 중단합니다.");
+            var active = Versions(state.active).Single(v => v.versionKey == state.versionKey);
+            foreach (var original in state.originals)
+                VerifyNode(OriginalPath(original), original);
+            string payload = StoredPath(active, "payload");
+            if (!Directory.Exists(Data.IoPath(payload)))
+                throw new InvalidDataException("원본 ZIP의 보관 자료가 없어 안전하게 복원할 수 없습니다.");
+            CheckRemovalTree(payload);
+            string[] candidates = Data.FilesRecursively(payload, "*")
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+            var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var affected = new HashSet<string>(result.missing.Concat(result.changed), StringComparer.OrdinalIgnoreCase);
+            var replacements = state.managed.Where(n => affected.Contains(n.path)).ToList();
+            var before = replacements.ToDictionary(n => n.path,
+                n => Node(Target(state.gameRoot, n.path), n.path), StringComparer.OrdinalIgnoreCase);
+            string token = Guid.NewGuid().ToString("N");
+            string prepare = Data.Under(Root, "self-repair-prep-" + token);
+            string saved = Data.Under(Root, "self-repair-backup-" + token);
+            if (Directory.Exists(prepare) || Directory.Exists(saved))
+                throw new IOException("복구 임시 폴더가 이미 존재해 덮어쓰지 않았습니다.");
+            Directory.CreateDirectory(prepare);
+            bool journalPublished = false;
+            try
+            {
+                foreach (var node in replacements)
+                {
+                    var contained = state.files.Where(f =>
+                        String.Equals(Container(f.path), node.path, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (contained.Count == 0)
+                        throw new InvalidDataException("복구할 파일의 원본 목록이 없습니다: " + node.path);
+                    foreach (var owned in contained)
+                    {
+                        string archived = ArchivedActiveFile(payload, owned, candidates, hashes);
+                        string destination = Data.Under(prepare, "replacement\\" + owned.path);
+                        if (File.Exists(Data.IoPath(destination)) || Directory.Exists(Data.IoPath(destination)))
+                            throw new InvalidDataException("복구 파일 경로 중복: " + owned.path);
+                        Data.Copy(archived, destination);
+                        VerifyNode(destination, owned);
+                    }
+                    VerifyNode(Data.Under(prepare, "replacement\\" + node.path), node);
+                    CheckLocks(Target(state.gameRoot, node.path));
+                }
+                var journal = new Journal { gameRoot = state.gameRoot, before = state,
+                    moves = new List<DeploymentMove>(), paths = replacements.Select(n => n.path).ToList() };
+                Data.Write(Path.Combine(prepare, "journal.json"), journal);
+                // Atomic publication: a crash before this point leaves the
+                // existing active deployment and ordinary recovery unchanged.
+                Data.MoveDirectoryWithRetry(prepare, transaction);
+                journalPublished = true;
+                try
+                {
+                    int count = 0;
+                    foreach (var node in replacements)
+                    {
+                        string gamePath = Target(state.gameRoot, node.path);
+                        var actual = Node(gamePath, node.path);
+                        var pinned = before[node.path];
+                        if (actual.directory != pinned.directory ||
+                            !String.Equals(actual.hash, pinned.hash, StringComparison.OrdinalIgnoreCase))
+                            throw new IOException("점검 이후 게임 파일이 다시 변경됐습니다. 보존 후 중단합니다: " + node.path);
+                        MoveRecorded(journal, gamePath, Data.Under(transaction, "before\\" + node.path));
+                        if (fault != null) fault(++count);
+                        MoveRecorded(journal, Data.Under(transaction, "replacement\\" + node.path), gamePath);
+                        VerifyNode(gamePath, node);
+                    }
+                    foreach (var node in state.managed)
+                        VerifyNode(Target(state.gameRoot, node.path), node);
+                    journal.committed = true;
+                    Data.Write(Path.Combine(transaction, "journal.json"), journal);
+                    Data.MoveDirectoryWithRetry(transaction, saved);
+                    return saved;
+                }
+                catch
+                {
+                    // Existing move journal restores both changed user files
+                    // and any previously missing nodes without losing data.
+                    Recover();
+                    throw;
+                }
+            }
+            catch
+            {
+                if (!journalPublished && Directory.Exists(prepare)) Directory.Delete(prepare, true);
+                throw;
+            }
+        }
         List<RegisteredZip> SourceZips()
         {
             string path = Path.Combine(Root, "source-zips.json");

@@ -784,6 +784,7 @@ namespace CampaignHangar
                     "newer version comparison handles numeric releases, normalization and unknown labels without guessing");
                 VerifyContainerTransitions(root);
                 VerifyDeploymentMoves(root);
+                VerifyActiveSelfRepair(root);
                 VerifyRemoval(root);
                 VerifyImportPublishLock(root);
                 string storageSource = Path.Combine(root, "storage-source");
@@ -1253,6 +1254,188 @@ namespace CampaignHangar
                 Assert(!File.Exists(cPath) && cross.Current().active == c.id &&
                     File.ReadAllText(Path.Combine(crossGame, @"Maps\Campaign\mission.SC2Map")) == "cross-a",
                     "cross-volume rollback restores previous active version and its file location");
+            }
+        }
+        static void VerifyActiveSelfRepair(string root)
+        {
+            string folder = Path.Combine(root, "self-repair");
+            Directory.CreateDirectory(folder);
+            var lib = new Library(Path.Combine(folder, "library"));
+            string game = Path.Combine(folder, "한국어 계정", "StarCraft II Test");
+            Directory.CreateDirectory(Path.Combine(game, "Maps", "Campaign"));
+            File.WriteAllText(Path.Combine(game, "StarCraft II.exe"), "test fixture, not actual game");
+            string metadata = Path.Combine(game, @"Maps\Campaign\metadata.txt");
+            string other = Path.Combine(game, @"Maps\Campaign\user-owned.SC2Map");
+            string bank = Path.Combine(game, "Banks", "do-not-change.SC2Bank");
+            Directory.CreateDirectory(Path.GetDirectoryName(bank));
+            File.WriteAllText(metadata, "original-game-metadata");
+            File.WriteAllText(other, "unowned-player-map");
+            File.WriteAllText(bank, "untouched bank contents");
+            var a = lib.Import(Zip(folder, "repair-a", "mission A", false), "repair-a");
+            var b = lib.Import(Zip(folder, "repair-b", "mission B", false), "repair-b");
+            lib.Activate(a.id, game, true, null);
+            Assert(File.Exists(metadata) && lib.InspectActiveRepair().IssueCount == 0,
+                "self-repair read-only inspection reports no error on a valid active deployment");
+            Reject(() => lib.RepairActiveFiles(), "self-repair refuses to modify valid game files");
+
+            // Exact user-reported deadlock: a previous activation recorded
+            // metadata.txt, another program removed it, no transaction exists.
+            File.Delete(metadata);
+            Assert(!Directory.Exists(Path.Combine(lib.Root, "transaction")),
+                "missing metadata has no incomplete transaction journal to replay");
+            Reject(() => lib.Activate(b.id, game, true, null),
+                "missing Maps/Campaign/metadata.txt blocks switching with the original protection guard");
+            Reject(() => lib.RestoreBase(),
+                "missing metadata also blocks base-game restoration with the old recovery route");
+            var missing = lib.InspectActiveRepair();
+            Assert(missing.canRepair && missing.missing.Contains(@"Maps\Campaign\metadata.txt") &&
+                missing.changed.Count == 0, "self-repair identifies exactly the missing active metadata");
+            string saved = lib.RepairActiveFiles();
+            Assert(File.Exists(metadata) && Data.Hash(metadata) ==
+                a.files.Single(f => f.path == @"Maps\Campaign\metadata.txt").hash &&
+                Directory.Exists(saved) && lib.InspectActiveRepair().IssueCount == 0,
+                "missing metadata is rebuilt from hash-pinned archived ZIP data and recovery backup is retained");
+            Assert(File.ReadAllText(other) == "unowned-player-map" &&
+                File.ReadAllText(bank) == "untouched bank contents" &&
+                lib.Current().active == a.id,
+                "metadata repair preserves unowned campaigns, Bank and active identity");
+            lib.Activate(b.id, game, true, null);
+            Assert(lib.Current().active == b.id && File.Exists(metadata),
+                "previously blocked campaign switch now succeeds without deleting another campaign");
+
+            // A user-modified file must be captured in an independent backup.
+            File.WriteAllText(metadata, "edited-by-another-launcher");
+            Assert(lib.InspectActiveRepair().changed.Contains(@"Maps\Campaign\metadata.txt"),
+                "self-repair distinguishes modified files from missing files");
+            string editedBackup = lib.RepairActiveFiles();
+            Assert(File.ReadAllText(Path.Combine(editedBackup, @"before\Maps\Campaign\metadata.txt")) ==
+                "edited-by-another-launcher" && lib.InspectActiveRepair().IssueCount == 0,
+                "edited metadata is preserved in local self-repair backup before the verified replacement");
+            lib.RestoreBase();
+            Assert(File.ReadAllText(metadata) == "original-game-metadata" &&
+                File.ReadAllText(other) == "unowned-player-map" &&
+                File.ReadAllText(bank) == "untouched bank contents",
+                "self-repair then RestoreBase restores exactly the pre-install original metadata and protects saves");
+
+            // Mid-repair failure must restore the externally edited file and
+            // preserve the former active version rather than hiding the error.
+            lib.Activate(a.id, game, true, null);
+            File.WriteAllText(metadata, "user-write-before-failure");
+            Reject(() => lib.RepairActiveFiles(step => { throw new IOException("injected repair fault"); }),
+                "fault after moving edited file triggers journal rollback");
+            Assert(File.ReadAllText(metadata) == "user-write-before-failure" &&
+                lib.Current().active == a.id &&
+                !Directory.Exists(Path.Combine(lib.Root, "transaction")),
+                "failed self-repair recovers exact user edit, active state and journal boundary");
+            lib.RepairActiveFiles();
+            Assert(lib.InspectActiveRepair().IssueCount == 0,
+                "self-repair works on retry after a verified rollback");
+
+            // Compromised archive is never trusted as replacement content.
+            File.Delete(metadata);
+            string sourcePayload = Path.Combine(lib.VersionFolder(a), "payload", "wrapper", "metadata.txt");
+            string previousPayload = File.ReadAllText(sourcePayload);
+            File.WriteAllText(sourcePayload, "tampered immutable archive");
+            Reject(() => lib.RepairActiveFiles(), "tampered archived metadata cannot be used as self-repair source");
+            Assert(!File.Exists(metadata) && lib.Current().active == a.id &&
+                File.ReadAllText(other) == "unowned-player-map" &&
+                File.ReadAllText(bank) == "untouched bank contents" &&
+                !Directory.Exists(Path.Combine(lib.Root, "transaction")),
+                "archive mismatch fails closed without claiming to repair or mutating the game");
+            File.WriteAllText(sourcePayload, previousPayload);
+            lib.RepairActiveFiles();
+            lib.RestoreBase();
+
+            // Extra files inside a loose SC2Mod are preserved before the
+            // complete known-owned container is reconstructed.
+            string looseZip = Path.Combine(folder, "self-repair-loose.zip");
+            using (var archive = ZipFile.Open(looseZip, ZipArchiveMode.Create))
+            {
+                using (var writer = new StreamWriter(archive.CreateEntry("wrapper/metadata.txt").Open()))
+                    writer.Write("title=LooseSelfRepair\ncampaign=wol\nversion=1.0");
+                using (var writer = new StreamWriter(archive.CreateEntry("wrapper/mission.SC2Map").Open()))
+                    writer.Write("map");
+                using (var writer = new StreamWriter(archive.CreateEntry("wrapper/Loose.SC2Mod/Base.SC2Data/GameData.xml").Open()))
+                    writer.Write("owned mod data");
+            }
+            var loose = lib.Import(looseZip, "repair-loose");
+            lib.Activate(loose.id, game, true, null);
+            string modExtra = Path.Combine(game, @"Mods\Loose.SC2Mod\user-added.txt");
+            File.WriteAllText(modExtra, "user's custom mod file");
+            Assert(lib.InspectActiveRepair().changed.Contains(@"Mods\Loose.SC2Mod"),
+                "added file inside managed loose mod is diagnosed as a changed container");
+            string looseBackup = lib.RepairActiveFiles();
+            Assert(!File.Exists(modExtra) && File.ReadAllText(Path.Combine(looseBackup, @"before\Mods\Loose.SC2Mod\user-added.txt")) ==
+                "user's custom mod file" && lib.InspectActiveRepair().IssueCount == 0,
+                "unexpected mod member is retained in backup, not silently destroyed, and exact container is recovered");
+            lib.RestoreBase();
+            Assert(File.ReadAllText(bank) == "untouched bank contents" && File.ReadAllText(other) == "unowned-player-map",
+                "loose mod recovery never touches unrelated campaigns or the player's Bank");
+            VerifyReportedRepairPaths(folder);
+            Console.WriteLine("CASE20 SELF-REPAIR PASS: missing metadata, edited file, archive hash, rollback, loose mod extras, no game/Banks touched.");
+        }
+        static void VerifyReportedRepairPaths(string root)
+        {
+            // Reports 7450/7451: CCM cleanup/reset changed coop_missions.json
+            // or Maps/Campaign/void/metadata.txt. Use imported ZIPs and real
+            // apply/remove code, not hand-built active.json states.
+            foreach (bool voidSlot in new[] { false, true })
+            {
+                string caseName = voidSlot ? "reported-7451-void" : "reported-7450-coop";
+                string folder = Path.Combine(root, caseName);
+                Directory.CreateDirectory(folder);
+                string game = Path.Combine(folder, "StarCraft II");
+                Directory.CreateDirectory(game);
+                File.WriteAllText(Path.Combine(game, "StarCraft II.exe"), "fixture only");
+                string relative = voidSlot ? @"Maps\Campaign\void\metadata.txt" :
+                    @"Maps\Campaign\coop_missions.json";
+                string target = Path.Combine(game, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                File.WriteAllText(target, "original player data");
+                string bank = Path.Combine(game, "Banks", "player.SC2Bank");
+                Directory.CreateDirectory(Path.GetDirectoryName(bank));
+                File.WriteAllText(bank, "keep bank");
+                string unrelated = Path.Combine(game, @"Maps\Campaign\keep-user.SC2Map");
+                File.WriteAllText(unrelated, "keep map");
+                string zip = Path.Combine(folder, caseName + ".zip");
+                using (var archive = ZipFile.Open(zip, ZipArchiveMode.Create))
+                {
+                    string prefix = voidSlot ? "wrapper/Maps/Campaign/void/" : "wrapper/";
+                    using (var w = new StreamWriter(archive.CreateEntry(prefix + "metadata.txt").Open()))
+                        w.Write("title=" + caseName + "\ncampaign=" + (voidSlot ? "lotv" : "wol") + "\nversion=1\n");
+                    using (var w = new StreamWriter(archive.CreateEntry(prefix + "mission.SC2Map").Open()))
+                        w.Write("own-map");
+                    if (!voidSlot)
+                        using (var w = new StreamWriter(archive.CreateEntry(prefix + "coop_missions.json").Open()))
+                            w.Write("{\"campaign\":\"fixture\"}");
+                }
+                var lib = new Library(Path.Combine(folder, "library"));
+                var active = lib.Import(zip, caseName);
+                var other = lib.Import(Zip(folder, caseName + "-next", "next mission", false), caseName + "-next");
+                lib.Activate(active.id, game, true, null);
+                Assert(lib.InspectActiveRepair().IssueCount == 0, caseName + " initially verifies");
+                if (voidSlot) File.Delete(target);
+                else File.WriteAllText(target, "externally reset CCM json");
+                Reject(() => lib.Activate(other.id, game, true, null),
+                    caseName + " existing protection blocks unsafe switch");
+                Reject(() => lib.RestoreBase(), caseName + " existing protection blocks unsafe removal");
+                var issue = lib.InspectActiveRepair();
+                Assert(issue.canRepair && (voidSlot ? issue.missing : issue.changed).Contains(relative),
+                    caseName + " preflight identifies exact reported path");
+                string backup = lib.RepairActiveFiles();
+                Assert(lib.InspectActiveRepair().IssueCount == 0 &&
+                    Data.Hash(target) == active.files.Single(f => f.path == relative).hash,
+                    caseName + " independently hash-pinned repair");
+                if (!voidSlot)
+                    Assert(File.ReadAllText(Path.Combine(backup, "before", relative)) == "externally reset CCM json",
+                        caseName + " preserves external JSON edits in user backup");
+                lib.RestoreBase();
+                Assert(File.ReadAllText(target) == "original player data" &&
+                    File.ReadAllText(bank) == "keep bank" && File.ReadAllText(unrelated) == "keep map",
+                    caseName + " restore preserves original content and unowned game files");
+                lib.Activate(other.id, game, true, null);
+                Assert(lib.Current().active == other.id, caseName + " can activate another campaign after repair");
+                lib.RestoreBase();
             }
         }
         static void VerifyRemoval(string root)

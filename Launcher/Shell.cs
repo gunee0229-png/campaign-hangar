@@ -282,14 +282,15 @@ namespace CampaignHangar
             });
             conflictingControls.Add(restoreGame);
             var maintenance = Group("업데이트 · 기록 · 복구", "필요할 때 실행하는 관리 기능입니다.");
-            var tools = SurfaceTable(2, 5); tools.Margin = new Padding(0, 10, 0, 0);
+            var tools = SurfaceTable(2, 6); tools.Margin = new Padding(0, 10, 0, 0);
             tools.ColumnStyles.Clear(); tools.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize)); tools.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             refresh = SettingButton("사이트 목록 새로고침", async delegate { await RefreshSite(); }); tools.Controls.Add(refresh, 0, 0);
             tools.Controls.Add(SettingButton("앱 업데이트 확인", async delegate { await CheckAppUpdate(true); }), 0, 1);
             tools.Controls.Add(SettingButton("설치·다운로드 기록", delegate { AppDialog.Info(this, jobs.Count == 0 ? "이번 실행의 기록이 없습니다." : String.Join("\n", jobs), "이번 실행의 기록"); }), 0, 2);
             tools.Controls.Add(SettingButton("실패한 전환 복구", async delegate { await Recover(); }), 0, 3);
-            tools.Controls.Add(restoreGame, 0, 4);
-            string[] descriptions = { "사이트의 신규 캠페인과 버전 정보를 다시 확인합니다.", "현재 앱 v" + AppUpdate.Current + " · 새 버전을 확인하고 동의 후 설치합니다.", "이번 실행에서 진행한 다운로드·설치 결과를 봅니다.", "중단된 파일 전환을 이전 적용 상태로 복구합니다.", "격납고가 적용한 파일만 적용 전 백업으로 되돌립니다. ZIP·뱅크·세이브는 유지합니다." };
+            tools.Controls.Add(SettingButton("설치 상태 점검·자가 복구", async delegate { await InspectAndRepairActive(); }), 0, 4);
+            tools.Controls.Add(restoreGame, 0, 5);
+            string[] descriptions = { "사이트의 신규 캠페인과 버전 정보를 다시 확인합니다.", "현재 앱 v" + AppUpdate.Current + " · 새 버전을 확인하고 동의 후 설치합니다.", "이번 실행의 기록을 봅니다.", "중단된 파일 전환의 복구 기록을 재생합니다.", "metadata.txt 누락·외부 변경 등으로 전환·삭제가 막혔을 때 보관본을 확인하고 안전 복구합니다. 변경된 파일은 별도 백업합니다.", "격납고가 적용한 파일만 적용 전 백업으로 되돌립니다. ZIP·뱅크·세이브는 유지합니다." };
             for (int i = 0; i < descriptions.Length; i++)
             {
                 var description = ContentLabel(descriptions[i], 9.75f);
@@ -319,7 +320,7 @@ namespace CampaignHangar
                 button.FontChanged += delegate { sizeTools(); }; button.HandleCreated += delegate { sizeTools(); };
                 button.TextChanged += delegate { sizeTools(); };
             }
-            conflictingControls.AddRange(new Control[] { refresh, tools.GetControlFromPosition(0, 1), tools.GetControlFromPosition(0, 3) });
+            conflictingControls.AddRange(new Control[] { refresh, tools.GetControlFromPosition(0, 1), tools.GetControlFromPosition(0, 3), tools.GetControlFromPosition(0, 4) });
             sizeTools();
             tools.CellPaint += delegate(object sender, TableLayoutCellPaintEventArgs e)
             {
@@ -656,6 +657,7 @@ namespace CampaignHangar
                     externalSession = null; externalProcess = null;
                     status.Text = "되돌릴 격납고 적용이 없습니다. 외부 런처가 바꾼 파일은 복원하지 않습니다."; return true;
                 }
+                if (!await EnsureActiveCcmReady()) return false;
                 if (!AppDialog.Confirm(this, "격납고가 적용한 파일을 적용 전 백업 상태로 되돌립니다.\n순정 파일을 새로 설치하는 기능은 아닙니다.\n보관 모드·ZIP·뱅크·세이브·플레이 기록은 유지합니다.\n외부 런처·CCM이 바꾼 미등록 파일은 복원 대상이 아닙니다.",
                     "기본 캠페인 되돌리기", "기본 캠페인 되돌리기")) return false;
                 SetBusy(true);
@@ -1866,6 +1868,12 @@ namespace CampaignHangar
         async Task RemoveInstalledSelected(Campaign installed, RemovalKind kind)
         {
             if(busy || installed==null || installed.kind=="dedicated" || installed.kind=="external")return;
+            // A previously altered active CCM must be repaired before removal
+            // can safely restore the user's pre-install files. Unrelated
+            // versions remain removable without touching that deployment.
+            var active = library.Current();
+            if (kind != RemovalKind.PreviousVersions && active.active == installed.id &&
+                !await EnsureActiveCcmReady()) return;
             SetBusy(true);
             try
             {
@@ -1946,6 +1954,11 @@ namespace CampaignHangar
                             Descendants(settings.GetControlFromPosition(0, 2)).OfType<MetalButton>()
                                 .Any(button => button.Text == "기본 캠페인 되돌리기"))
                             throw new InvalidOperationException("Base campaign restore belongs in Settings > Updates/Records/Recovery exactly once.");
+                        if (Descendants(settings).OfType<MetalButton>().Count(button =>
+                            button.Text == "설치 상태 점검·자가 복구") != 1 ||
+                            !Descendants(settings.GetControlFromPosition(0, 3)).OfType<MetalButton>()
+                                .Any(button => button.Text == "설치 상태 점검·자가 복구"))
+                            throw new InvalidOperationException("The self-repair action must remain discoverable in Settings > Recovery.");
                         VerifyChildren(settings); TextLayout.VerifyLabels(settings);
                         var bankField = bankFolders;
                         var bankLayout = (TableLayoutPanel)bankField.Parent;
@@ -2216,6 +2229,10 @@ namespace CampaignHangar
         {
             if (busy) return false;
             if (!File.Exists(Path.Combine(game.Text, "StarCraft II.exe"))) { ShowPage(settingsPage); status.Text = "게임 경로를 먼저 선택해 주세요."; return false; }
+            // Inspect BEFORE any replacement or "already applied" success
+            // message. An externally reset CCM directory must lead to a
+            // verified user-approved repair, not a dead-end failure dialog.
+            if (!await EnsureActiveCcmReady()) return false;
             var selected = library.Versions(item.id).FirstOrDefault(c => c.versionKey == versionKey) ?? item;
             var applied = library.Current();
             if (applied.active==item.id && applied.versionKey==selected.versionKey &&
@@ -2604,6 +2621,86 @@ namespace CampaignHangar
             catch (Exception error) { Error(error); }
             finally { SetBusy(false); }
         }
+        // All CCM apply/restore/remove entry points share this read-only
+        // preflight. If a managed file was changed outside the Hangar, the
+        // same visible repair flow is offered before the requested action.
+        async Task<bool> EnsureActiveCcmReady()
+        {
+            if (busy || distributionView.DownloadInProgress) return false;
+            if (String.IsNullOrWhiteSpace(library.Current().active)) return true;
+            ActiveRepairInspection inspection;
+            SetBusy(true);
+            status.Text = "적용 중인 CCM 파일 상태 확인 중 · 파일을 변경하지 않습니다.";
+            try { inspection = await Task.Run(() => library.InspectActiveRepair()); }
+            catch (Exception error) { Error(error); return false; }
+            finally { SetBusy(false); }
+            if (inspection.IssueCount > 0)
+                return await InspectAndRepairActive(inspection);
+            if (!String.IsNullOrWhiteSpace(inspection.blockedReason))
+            {
+                AppDialog.Info(this, inspection.blockedReason +
+                    "\n\n설정 → 업데이트 · 기록 · 복구에서 상세 상태를 확인하세요. 이 작업은 파일을 변경하지 않았습니다.",
+                    "적용 상태 확인 필요");
+                return false;
+            }
+            return true;
+        }
+        async Task<bool> InspectAndRepairActive(ActiveRepairInspection initial = null)
+        {
+            if (busy || distributionView.DownloadInProgress) return false;
+            if (isolated)
+            {
+                AppDialog.Info(this, "격리 UI 미리보기에서는 실제 게임 파일을 점검·수정하지 않습니다.", "설치 상태 자가 복구");
+                return false;
+            }
+            ActiveRepairInspection inspection = initial;
+            if (inspection == null)
+            {
+                SetBusy(true);
+                try { inspection = await Task.Run(() => library.InspectActiveRepair()); }
+                catch (Exception error) { Error(error); return false; }
+                finally { SetBusy(false); }
+            }
+            if (!inspection.canRepair)
+            {
+                AppDialog.Info(this, inspection.blockedReason ??
+                    "격납고가 적용한 CCM 파일에서 누락·변경을 발견하지 못했습니다.\n현재 문제는 설치 상태 검증 이외의 원인일 수 있습니다.",
+                    "설치 상태 점검 결과");
+                return inspection.IssueCount == 0 && String.IsNullOrWhiteSpace(inspection.blockedReason);
+            }
+            string[] examples = inspection.missing.Select(p => "누락: " + p)
+                .Concat(inspection.changed.Select(p => "변경: " + p)).Take(10).ToArray();
+            string details = String.Join("\n", examples);
+            if (inspection.IssueCount > examples.Length)
+                details += "\n그 외 " + (inspection.IssueCount - examples.Length) + "개";
+            if (!AppDialog.Confirm(this,
+                "적용 중인 CCM: " + inspection.campaign +
+                "\n파일 누락 " + inspection.missing.Count + "건 · 외부 변경 " + inspection.changed.Count + "건" +
+                "\n\n" + details +
+                "\n\n보관된 원본 ZIP 자료의 SHA-256이 일치할 때만 복구합니다." +
+                "\n기존 파일·사용자 변경 내용은 캠페인 보관소의 별도 복구 백업에 보존합니다." +
+                "\n다른 캠페인·Bank·Save·ZIP은 건드리지 않습니다." +
+                "\n스타크래프트 II를 종료한 상태에서만 진행할 수 있습니다.",
+                "설치 상태 자가 복구", "변경 파일 백업 후 복구")) return false;
+            SetBusy(true);
+            try
+            {
+                string backup = await RunWork("설치 상태 자가 복구",
+                    progress => library.RepairActiveFiles());
+                var verified = await Task.Run(() => library.InspectActiveRepair());
+                if (verified.IssueCount != 0 || !String.IsNullOrWhiteSpace(verified.blockedReason))
+                    throw new IOException("복구 직후 적용 파일 재검증을 통과하지 못했습니다. 기존 백업을 보존하고 작업을 중단합니다.");
+                installedView.Reload(catalogue);
+                status.Text = "자가 복구 완료 · 누락·변경된 적용 파일을 검증된 보관 자료로 복구했습니다.";
+                AppDialog.Info(this, "누락·변경된 파일을 복구했습니다.\n다시 캠페인을 적용하거나 삭제할 수 있습니다." +
+                    "\n\n외부에서 변경했던 내용의 복구 백업:\n" + backup +
+                    "\n\n문제가 반복되면 해당 백업을 보존하고 설치된 다른 프로그램의 파일 변경을 확인하세요.",
+                    "설치 상태 복구 완료");
+                return true;
+            }
+            catch (Exception error) { Error(error); return false; }
+            finally { SetBusy(false); }
+        }
         void MarkCampaignViewed(Campaign item)
         {
             if (notificationFeed == null) return;
@@ -2883,8 +2980,12 @@ namespace CampaignHangar
             // with the original stack and current call site. Never upload it.
             string message = error == null ? "알 수 없는 오류" : error.Message;
             bool accessProblem = Storage.IsAccessFailure(error);
+            bool managedFilesChanged = !accessProblem &&
+                (message.Contains("외부에서 변경") || message.Contains("이전 활성 파일"));
             if (accessProblem)
                 message = Storage.AccessDeniedGuidance(root, downloadsRoot) + "\n\n상세: " + message;
+            else if (managedFilesChanged)
+                message += "\n\n원래 파일을 무작정 삭제하지 마세요. 누락·변경 파일을 진단하고, 동의하면 사용자 변경본을 별도 백업한 후 복구할 수 있습니다.";
             try
             {
                 string folder = isolated ? Path.Combine(root, "qa-diagnostics") :
@@ -2906,7 +3007,13 @@ namespace CampaignHangar
                 QaErrorCount++;
                 return; // The QA harness fails with the captured stack, not a modal hang.
             }
-            if (!IsDisposed) AppDialog.Info(this, message,
+            if (IsDisposed) return;
+            if (managedFilesChanged && !isolated)
+            {
+                if (AppDialog.Confirm(this, message, "작업 미완료 · 관리 파일 변경 감지", "지금 상태 점검·복구"))
+                    BeginInvoke(new Action(async delegate { await InspectAndRepairActive(); }));
+            }
+            else AppDialog.Info(this, message,
                 accessProblem ? "폴더 접근 실패 · 관리자 권한 확인" : "작업 미완료");
         }
         protected override void OnFormClosing(FormClosingEventArgs e)
