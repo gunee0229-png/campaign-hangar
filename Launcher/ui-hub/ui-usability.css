@@ -383,3 +383,40 @@ body.reduce-motion .action-button.is-recommend-pending .action-icon{animation:no
   .editor-window-page .layout-color-groups .layout-color-grid{
     grid-template-columns:minmax(0,1fr)}
 }
+/* Zerg's original vertical logo centered its content. When the responsive
+   side rail turns the logo horizontal, match the other race skins' left edge. */
+body[data-theme="zerg"]:is([data-layout-menu="left"],[data-layout-menu="right"]) .sidebar-logo{
+  justify-content:flex-start!important;
+}
+body[data-theme="zerg"]:is([data-layout-menu="left"],[data-layout-menu="right"]) .sidebar-logo .logo-copy{
+  align-items:flex-start!important;text-align:left!important;
+}
+/* Two separate optimization toggles. Keep settings navigation and native
+   window controls available so both choices can always be reversed. */
+body[data-hide-themes="true"] .sidebar>.themes-caption,
+body[data-hide-themes="true"] .sidebar>.theme-switcher{
+  display:none!important;
+}
+body[data-hide-top="true"] #workspace>.workspace-header,
+body[data-hide-top="true"] #workspace>.activation-readout{
+  display:none!important;
+}
+/* Quick-operation right-click hide and blank-canvas restore. Position is
+   viewport-clamped by JS; a theme's action clip-path must not clip this menu. */
+.quick-action-context-menu{
+  min-width:215px;max-width:min(310px,calc(100vw - 16px));
+  max-height:min(60vh,370px);overflow-y:auto;overflow-x:hidden;
+}
+.quick-action-context-menu .quick-action-menu-heading{
+  display:block;padding:9px 12px 8px;border-bottom:1px solid var(--edge-faint);
+  font-size:11px;line-height:1.4;color:var(--secondary);overflow-wrap:anywhere;
+}
+.quick-action-context-menu button{
+  min-height:38px;white-space:normal;overflow-wrap:anywhere;word-break:keep-all;
+}
+.quick-action-menu-empty{
+  display:block;padding:12px;color:var(--dim);font-size:11px;line-height:1.5;
+}
+.action-strip:focus-visible{
+  outline:2px solid var(--accent);outline-offset:3px;
+}

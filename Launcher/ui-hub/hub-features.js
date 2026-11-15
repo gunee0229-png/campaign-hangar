@@ -359,7 +359,10 @@
         toggle.title=node.dataset.campaignHidden==="true"?"캠페인 메뉴 다시 표시":"캠페인 메뉴 숨기기";
         toggle.setAttribute("aria-label",toggle.title);}
     });
-    ACTION_IDS.forEach(function(id){var node=byId(id);if(node)node.style.order=v.actions.indexOf(id);});
+    ACTION_IDS.forEach(function(id){
+      var node=byId(id);if(!node)return;
+      node.style.order=v.actions.indexOf(id);
+    });
     var rail=document.querySelector(".action-rail-label");if(rail)rail.style.order=99;
     var contact=byId("contactGrid");
     if(contact){
@@ -371,6 +374,12 @@
       if(!contact.hidden&&api.renderContacts)api.renderContacts();
     }
     applyFreeGeometry(v);
+    // Quick actions hidden from the normal rail use the same theme-specific
+    // saved field as the free-layout editor, not a second storage system.
+    ACTION_IDS.forEach(function(id){
+      var node=byId(id);if(!node)return;
+      node.hidden=(v.hiddenElements||[]).indexOf(id)>=0;
+    });
     applyQuickSizes(v);
     ensureQuickResize();
     renderSettings();
@@ -494,12 +503,31 @@
     if(api.live)api.sendHost("layout-save:"+JSON.stringify(profiles));
     else try{localStorage.setItem("campaign-hangar-theme-layouts",JSON.stringify(profiles));}catch(_){}
   }
+  function getHiddenActionIds(){
+    var v=current();
+    return v.actions.filter(function(id){return (v.hiddenElements||[]).indexOf(id)>=0;});
+  }
+  function setActionHidden(id,hide){
+    if(ACTION_IDS.indexOf(id)<0)return false;
+    var v=current(),hidden=(v.hiddenElements||[]).indexOf(id)>=0;
+    if(hidden===!!hide)return false;
+    if(editing)record();
+    v.hiddenElements=(v.hiddenElements||[]).filter(function(k){return k!==id;});
+    if(hide)v.hiddenElements.push(id);
+    if(!editing)profiles[theme].preset="custom";
+    apply();
+    if(editing){syncEditorHandles();renderEditor();}
+    else persistProfiles();
+    return true;
+  }
   function applyPreset(key){
     if(!PRESETS[key])return;
     if(editing)cancelEdit();
     var colors=clone(profiles[theme].layout.colors||{});
+    var hiddenActions=getHiddenActionIds();
     profiles[theme].layout=preset(theme,key);
     profiles[theme].layout.colors=colors;
+    profiles[theme].layout.hiddenElements=hiddenActions;
     profiles[theme].preset=key;
     apply();persistProfiles();
     // A click from Settings must visibly switch the actual page immediately,
@@ -517,6 +545,7 @@
       next.contactOrder=clone(draft.contactOrder||CONTACT_IDS);
       next.nav=validNav(draft.nav);
       next.hiddenCampaigns=clone(draft.hiddenCampaigns||[]);
+      next.hiddenElements=(draft.hiddenElements||[]).filter(function(k){return ACTION_IDS.indexOf(k)>=0;});
     }else if(field==="free"&&value===true&&!draft.free){
       next.panels=captureFreeGeometry(draft);
       next.free=true;
@@ -1571,6 +1600,7 @@
   }
   window.HangarFeatures={
     init:init,onTheme:onTheme,onView:onView,onSelection:onSelection,
+    getHiddenActionIds:getHiddenActionIds,setActionHidden:setActionHidden,
     suspendArchive:suspendArchive,resumeArchive:resumeArchive,
     openManage:openManage,closeManage:closeManage,
     setManageChoices:setManageChoices,

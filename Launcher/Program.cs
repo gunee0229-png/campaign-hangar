@@ -126,6 +126,15 @@ namespace CampaignHangar
                 try { DedicatedChecks.Run(Path.GetFullPath(args[1])); return 0; }
                 catch (Exception error) { Console.Error.WriteLine(error); return 1; }
             }
+            if (args.Length == 5 && args[0] == "--dedicated-layout-audit")
+            {
+                try {
+                    DedicatedLayoutAudit.Run(Path.GetFullPath(args[1]), Path.GetFullPath(args[2]),
+                        Path.GetFullPath(args[3]), Path.GetFullPath(args[4]));
+                    return 0;
+                }
+                catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+            }
             if (args.Length == 2 && args[0] == "--dedicated-wc3-check")
             {
                 try { DedicatedChecks.RunWc3(Path.GetFullPath(args[1])); return 0; }
@@ -159,6 +168,11 @@ namespace CampaignHangar
             if (args.Length == 2 && args[0] == "--dedicated-online-check")
             {
                 try { DedicatedChecks.RunPublished(Path.GetFullPath(args[1])); return 0; }
+                catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+            }
+            if (args.Length == 2 && args[0] == "--dedicated-online-odyssey-check")
+            {
+                try { DedicatedChecks.RunPublishedOdyssey(Path.GetFullPath(args[1])); return 0; }
                 catch (Exception error) { Console.Error.WriteLine(error); return 1; }
             }
             if (args.Length == 2 && args[0] == "--dedicated-additional-check")

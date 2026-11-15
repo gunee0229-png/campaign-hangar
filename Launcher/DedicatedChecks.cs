@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -358,6 +359,133 @@ namespace CampaignHangar
             }
             Console.WriteLine("DEDICATED ONLINE COMPLETE: pinned public manifest hashes and original ZIP install/uninstall; no actual game execution or production game mutation.");
         }
+        // Unlike synthetic 8-byte MPQ fixtures, this check downloads the actual
+        // 342 MB SHA-pinned Odyssey release through the production installer.
+        // Every game file is written below a unique fake StarCraft II root.
+        public static void RunPublishedOdyssey(string root)
+        {
+            if (Directory.Exists(root)) throw new InvalidOperationException("Real Odyssey QA requires a new isolated directory.");
+            Directory.CreateDirectory(root);
+            File.WriteAllText(Path.Combine(root, "preserved.SC2Bank"), "original-bank");
+            File.WriteAllText(Path.Combine(root, "preserved.SC2Save"), "original-save");
+            var item = Data.ParseCatalogue(Data.GetText(Data.Site + "/campaigns.js"))
+                .Single(c => c.id == "odyssey-ko");
+            const string pinned = "280cfd140b2c0659708aa9214037554ab560e0df80548f18c3792076840dc9fe";
+            Check(item.dedicatedManifestSha256 == pinned && DedicatedLibrary.Ready(item),
+                "live archive lists exactly the pinned original Odyssey release");
+            string game = Path.Combine(root, "fresh-game"), storage = Path.Combine(root, "fresh-storage");
+            PrepareOdysseyFakeGame(game);
+            var library = new DedicatedLibrary(storage);
+            string manifestDir = Path.Combine(root, "manifest"); Directory.CreateDirectory(manifestDir);
+            var normalized = library.FetchRelease(item, manifestDir, CancellationToken.None);
+            var original = Data.Read<DedicatedRelease>(Path.Combine(manifestDir, "release.json"));
+            Check(original.files.Count == 29 && original.launches.Count == 2 &&
+                original.files.Count(f => f.path.EndsWith("Odyssey Campaign Launcher.SC2Map", StringComparison.OrdinalIgnoreCase)) == 2 &&
+                original.files.Where(f => f.path.EndsWith("Odyssey Campaign Launcher.SC2Map", StringComparison.OrdinalIgnoreCase))
+                    .Select(f => f.sha256).Distinct().Count() == 1 &&
+                normalized.files.Count == 28 && normalized.files.Count(f => f.path.Contains(" Mission ")) == 27 &&
+                normalized.packages.Single().entries.Count == 28,
+                "authentic Odyssey signed manifest contains 27 missions and 2 identical launchers reduced to 1");
+            long reported = 0;
+            Console.WriteLine("ODYSSEY REAL DOWNLOAD BEGIN " + original.packages.Single().bytes + " bytes");
+            library.Install(item, game, value => {
+                if (!value.bytes || value.total <= 0 || !value.stage.Contains("다운로드")) return;
+                if (value.completed - reported >= 32L * 1024 * 1024 || value.completed == value.total)
+                {
+                    reported = value.completed;
+                    Console.WriteLine("ODYSSEY REAL DOWNLOAD PROGRESS " + reported + "/" + value.total);
+                }
+            }, CancellationToken.None);
+            VerifyRealOdysseyLayout(library, item, normalized, game, "public 342 MB ZIP fresh install");
+            string archive = Directory.GetFiles(Path.Combine(storage, "dedicated"), "0.zip", SearchOption.AllDirectories)
+                .Single(file => new FileInfo(file).Length == original.packages[0].bytes &&
+                    Data.Hash(file) == original.packages[0].sha256);
+            Check(File.Exists(archive) && new FileInfo(archive).Length == 342506098,
+                "actual GitHub Odyssey ZIP matches pinned SHA256 and size");
+            string savedState = Data.Json.Serialize(library.Current());
+            library.Install(item, game, null, CancellationToken.None);
+            Check(savedState == Data.Json.Serialize(library.Current()) &&
+                Directory.GetFiles(Path.Combine(storage, "dedicated"), "0.zip", SearchOption.AllDirectories).Length == 1,
+                "reinstall of complete public package reuses verified 28 files without another 342 MB ZIP");
+            VerifyRealOdysseyLayout(library, item, normalized, game, "public ZIP reinstall");
+            foreach (bool manualCopies in new[] { false, true })
+            {
+                string suffix = manualCopies ? "copied-maps" : "nested-only";
+                string oldGame = Path.Combine(root, "legacy-" + suffix + "-game");
+                string oldStorage = Path.Combine(root, "legacy-" + suffix + "-storage");
+                PrepareOdysseyFakeGame(oldGame);
+                foreach (var file in original.files)
+                {
+                    string correct = Data.Under(game, "Maps/Odyssey/" + Path.GetFileName(file.path));
+                    string nested = Data.Under(oldGame, file.path);
+                    Directory.CreateDirectory(Path.GetDirectoryName(nested));
+                    File.Copy(correct, nested);
+                    if (manualCopies)
+                    {
+                        string flat = Data.Under(oldGame, "Maps/Odyssey/" + Path.GetFileName(file.path));
+                        Directory.CreateDirectory(Path.GetDirectoryName(flat));
+                        if (!File.Exists(flat)) File.Copy(correct, flat);
+                    }
+                }
+                var oldState = new DedicatedState {
+                    gameRoot = Path.GetFullPath(oldGame),
+                    installed = new List<DedicatedInstalled> { new DedicatedInstalled {
+                        id = original.id, version = original.version, manifestSha256 = pinned, release = original } },
+                    originals = original.files.Select(f => new DedicatedOriginal { path = f.path }).ToList()
+                };
+                Data.Write(Path.Combine(oldStorage, "dedicated/installed.json"), oldState);
+                var oldLibrary = new DedicatedLibrary(oldStorage);
+                var card = new Campaign { id = item.id, kind = "dedicated" };
+                Check(oldLibrary.NeedsRepair(card), suffix + ": genuinely nested previous install is flagged for repair");
+                oldLibrary.InstallArchives(original, pinned, new[] { archive }, oldGame, null, CancellationToken.None);
+                VerifyRealOdysseyLayout(oldLibrary, card, normalized, oldGame, suffix + ": actual publisher ZIP migration");
+                Check(original.files.All(f => !File.Exists(Data.Under(oldGame, f.path))),
+                    suffix + ": obsolete nested files are removed after successful reinstall");
+                oldLibrary.Uninstall(original.id, oldGame);
+                if (manualCopies)
+                    Check(normalized.files.All(f => File.Exists(Data.Under(oldGame, f.path)) &&
+                        Data.Hash(Data.Under(oldGame, f.path)) == f.sha256),
+                        "manual user-copied mission originals survive subsequent uninstall");
+                else
+                    Check(normalized.files.All(f => !File.Exists(Data.Under(oldGame, f.path))),
+                        "uninstall after nested-only migration removes only managed maps");
+            }
+            library.Uninstall(item.id, game);
+            Check(normalized.files.All(f => !File.Exists(Data.Under(game, f.path))) &&
+                library.Current().installed.Count == 0 &&
+                File.ReadAllText(Path.Combine(root, "preserved.SC2Bank")) == "original-bank" &&
+                File.ReadAllText(Path.Combine(root, "preserved.SC2Save")) == "original-save",
+                "public Odyssey ZIP uninstall removes managed files and preserves Bank/Save fixture data");
+            Console.WriteLine("ODYSSEY REAL ZIP COMPLETE: pinned 342 MB public ZIP installed, all 27 missions/1 launcher hashed, both launch paths, normal reinstall, legacy reinstallation with/without manual copy, uninstall. NO REAL SC2 GAME EXECUTED.");
+        }
+        static void PrepareOdysseyFakeGame(string root)
+        {
+            Directory.CreateDirectory(Path.Combine(root, "Support64"));
+            File.WriteAllText(Path.Combine(root, "StarCraft II.exe"), "fixture-not-executable");
+            File.WriteAllText(Path.Combine(root, "Support64/SC2Switcher_x64.exe"), "fixture-not-executable");
+        }
+        static void VerifyRealOdysseyLayout(DedicatedLibrary library, Campaign item, DedicatedRelease release,
+            string game, string context)
+        {
+            var saved = library.Installed(item.id);
+            string maps = Path.Combine(game, "Maps", "Odyssey");
+            Check(saved != null && !library.NeedsRepair(item) && saved.release.files.Count == 28 &&
+                Directory.Exists(maps) && Directory.GetFiles(maps, "*.SC2Map", SearchOption.TopDirectoryOnly).Length == 28 &&
+                Directory.GetDirectories(maps).Length == 0 &&
+                release.files.All(f => f.path.StartsWith("Maps/Odyssey/", StringComparison.OrdinalIgnoreCase) &&
+                    f.path.Split('/').Length == 3 && File.Exists(Data.Under(game, f.path)) &&
+                    new FileInfo(Data.Under(game, f.path)).Length == f.bytes && Data.Hash(Data.Under(game, f.path)) == f.sha256) &&
+                File.Exists(Path.Combine(maps, "Act I Mission 01 - Hell's Rejects.SC2Map")) &&
+                File.Exists(Path.Combine(maps, "Act II Mission 01 - Invasion Day.SC2Map")),
+                context + ": 28 flat MPQ files all match signed SHA256/size, no nested folders");
+            var first = library.LaunchInfo(item, game, 1);
+            var second = library.LaunchInfo(item, game, 2);
+            string start = "\"" + Path.Combine(maps, "Odyssey Campaign Launcher.SC2Map") + "\"";
+            string switcher = Path.Combine(game, "Support64", "SC2Switcher_x64.exe");
+            Check(first.FileName == switcher && second.FileName == switcher &&
+                first.Arguments == start && second.Arguments == start && !first.UseShellExecute && !second.UseShellExecute,
+                context + ": both episode launch actions point at the verified flat Odyssey launcher");
+        }
         static byte[] Mpq(byte value) { return new byte[] { 77, 80, 81, 26, value, 2, 3, 4 }; }
         static DedicatedRelease Package(string root, string id, byte map, byte shared, string version, out string zip,
             string sharedPath = "Mods/Shared.SC2Mod")
@@ -412,6 +540,24 @@ namespace CampaignHangar
             var conflict = Package(root, "campaign-conflict", 3, 11, "1.0-ko", out zipBad);
             var update = Package(root, "campaign-a", 4, 10, "2.0-ko", out zipUpdate);
             DedicatedLibrary.ValidateRelease(a);
+            var contract = new DedicatedLayoutContract { schema = 1, id = a.id,
+                manifestSha256 = Stamp, gameFiles = a.files.Select(f => f.path).ToList(),
+                launchMaps = a.launches.Select(l => l.path).ToList(),
+                siblingRequirements = new List<DedicatedSiblingRequirement> {
+                    new DedicatedSiblingRequirement { launcher = a.launches[0].path,
+                        files = new List<string> { a.launches[0].path } } } };
+            Check(DedicatedLayoutAudit.Preflight(contract, a, Stamp).files.Count == 2,
+                "shared map+mod package uses the independent generic layout contract");
+            var incorrectContract = Data.Json.Deserialize<DedicatedLayoutContract>(Data.Json.Serialize(contract));
+            incorrectContract.gameFiles[0] = "Maps/campaign-a/extra/Start.SC2Map";
+            Reject(() => DedicatedLayoutAudit.Preflight(incorrectContract, a, Stamp),
+                "future campaigns cannot pass layout validation by relying only on their own ZIP paths");
+            var incompleteMapping = Data.Json.Deserialize<DedicatedRelease>(Data.Json.Serialize(a));
+            incompleteMapping.packages[0].entries = new Dictionary<string, string> {
+                { a.files[0].path, a.files[0].path }
+            };
+            Reject(() => DedicatedLibrary.ValidateRelease(incompleteMapping),
+                "explicit release ZIP mapping must cover every declared game file before download");
             Check(DedicatedLibrary.ReleaseUrl(a.packages[0].url), "exact public release repository accepted");
             Check(!DedicatedLibrary.ReleaseUrl("https://github.com/other/repo/releases/download/a/a.zip") &&
                 !DedicatedLibrary.ReleaseUrl(DedicatedLibrary.ReleasePrefix + "../a.zip") &&
@@ -513,10 +659,140 @@ namespace CampaignHangar
             VerifyConflictDialog(root);
             VerifyCinematicsVariants(root);
             VerifyInstallConflictRemovals(root);
+            VerifyMixedDedicatedPackageLayout(root);
+            VerifyOdysseyLayout(root);
             VerifySelectiveInstall(root);
             VerifyOperationIsolation(root);
             VerifyUI(root, ccm, card);
             Console.WriteLine("DEDICATED COMPLETE: isolated local install/update/uninstall/failure protection and UI; no real game, bank or network mutation.");
+        }
+        static void VerifyMixedDedicatedPackageLayout(string root)
+        {
+            string folder = Path.Combine(root, "mixed-package-layout"), inputs = Path.Combine(folder, "inputs");
+            Directory.CreateDirectory(inputs);
+            string zipPath = Path.Combine(inputs, "mixed-layout.zip");
+            string[] sources = { "Source/Part1/Start.SC2Map", "Source/Part2/Start.SC2Map",
+                "Source/Models/CustomAssets.SC2Mod/DocumentInfo", "Source/Mods/GlobalAudio.SC2Mod" };
+            string[] targets = { "Maps/MixedCampaign/Part1/Start.SC2Map",
+                "Maps/MixedCampaign/Part2/Start.SC2Map",
+                "Mods/CustomAssets.SC2Mod/DocumentInfo", "Mods/GlobalAudio.SC2Mod" };
+            byte[][] data = { Mpq(31), Mpq(32), System.Text.Encoding.UTF8.GetBytes("mod-metadata"),
+                Mpq(33) };
+            var release = new DedicatedRelease { schema = 1, id = "mixed-layout", name = "mixed release fixture",
+                version = "1.0", files = new List<DedicatedFile>(),
+                launches = new List<DedicatedLaunch> { new DedicatedLaunch { label = "part1", path = targets[0] },
+                    new DedicatedLaunch { label = "part2", path = targets[1] } },
+                packages = new List<DedicatedBundle>() };
+            var mapped = new Dictionary<string, string>(StringComparer.Ordinal);
+            using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+                for (int i = 0; i < sources.Length; i++)
+                {
+                    mapped.Add(sources[i], targets[i]);
+                    using (var writer = archive.CreateEntry(sources[i]).Open())
+                        writer.Write(data[i], 0, data[i].Length);
+                    using (var hash = SHA256.Create())
+                        release.files.Add(new DedicatedFile { path = targets[i], bytes = data[i].Length,
+                            sha256 = BitConverter.ToString(hash.ComputeHash(data[i])).Replace("-", "").ToLowerInvariant() });
+                }
+            release.packages.Add(new DedicatedBundle { url = DedicatedLibrary.ReleasePrefix + "fixture/mixed-layout.zip",
+                entries = mapped, sha256 = Data.Hash(zipPath), bytes = new FileInfo(zipPath).Length });
+            var manifest = Path.Combine(inputs, "manifest.json");
+            Data.Write(manifest, release);
+            var contract = new DedicatedLayoutContract { schema = 1, id = release.id,
+                manifestSha256 = Data.Hash(manifest), gameFiles = targets.ToList(),
+                launchMaps = new List<string> { targets[0], targets[1] },
+                siblingRequirements = new List<DedicatedSiblingRequirement> {
+                    new DedicatedSiblingRequirement { launcher = targets[0], files = new List<string> { targets[0] } },
+                    new DedicatedSiblingRequirement { launcher = targets[1], files = new List<string> { targets[1] } }
+                } };
+            string contractPath = Path.Combine(inputs, "contract.json");
+            Data.Write(contractPath, contract);
+            DedicatedLayoutAudit.Run(contractPath, manifest, inputs, Path.Combine(folder, "audit"));
+            Check(File.Exists(Path.Combine(folder, "audit/layout-audit-result.json")) &&
+                new FileInfo(zipPath).Length == release.packages[0].bytes &&
+                Data.Hash(zipPath) == release.packages[0].sha256,
+                "independent reusable audit verifies mixed nested chapters, two start maps, packed mod and directory-backed mod");
+        }
+        static void VerifyOdysseyLayout(string root)
+        {
+            string fixture = Path.Combine(root, "odyssey-dedicated-layout");
+            string game = Path.Combine(fixture, "game"), storage = Path.Combine(fixture, "storage");
+            Directory.CreateDirectory(game);
+            File.WriteAllText(Path.Combine(game, "StarCraft II.exe"), "fixture-not-executable");
+            Directory.CreateDirectory(Path.Combine(game, "Support64"));
+            File.WriteAllText(Path.Combine(game, "Support64/SC2Switcher_x64.exe"), "fixture-not-executable");
+            string bank = Path.Combine(fixture, "preserved.SC2Bank"), save = Path.Combine(fixture, "preserved.SC2Save");
+            File.WriteAllText(bank, "bank-unchanged"); File.WriteAllText(save, "save-unchanged");
+            const string first = "Maps/Odyssey/Odyssey Campaign Act I + Launcher/";
+            const string second = "Maps/Odyssey/Odyssey Campaign Act II 01-13 + Launcher/";
+            var originalPaths = new[] {
+                first + "Act I Mission 01.SC2Map", first + "Odyssey Campaign Launcher.SC2Map",
+                second + "Act II Mission 01.SC2Map", second + "Odyssey Campaign Launcher.SC2Map"
+            };
+            var bytes = new[] { Mpq(11), Mpq(55), Mpq(22), Mpq(55) };
+            var release = new DedicatedRelease {
+                schema = 1, id = "odyssey-ko", version = "ko-2026.11.14-v1", name = "Odyssey Korean fixture",
+                files = new List<DedicatedFile>(), packages = new List<DedicatedBundle>(),
+                launches = new List<DedicatedLaunch> {
+                    new DedicatedLaunch { label = "1막", path = originalPaths[1] },
+                    new DedicatedLaunch { label = "2막", path = originalPaths[3] }
+                }
+            };
+            string zip = Path.Combine(fixture, "odyssey-original-wrapped.zip");
+            var entries = new Dictionary<string, string>(StringComparer.Ordinal);
+            using (var archive = ZipFile.Open(zip, ZipArchiveMode.Create))
+                for (int i = 0; i < originalPaths.Length; i++)
+                {
+                    string entry = "Odyssey/Odyssey/" + originalPaths[i].Substring("Maps/Odyssey/".Length);
+                    entries.Add(entry, originalPaths[i]);
+                    using (var stream = archive.CreateEntry(entry).Open())
+                        stream.Write(bytes[i], 0, bytes[i].Length);
+                    using (var sha = SHA256.Create())
+                        release.files.Add(new DedicatedFile { path = originalPaths[i], bytes = bytes[i].Length,
+                            sha256 = BitConverter.ToString(sha.ComputeHash(bytes[i])).Replace("-", "").ToLowerInvariant() });
+                }
+            release.packages.Add(new DedicatedBundle { url = DedicatedLibrary.ReleasePrefix + "fixture/odyssey.zip",
+                sha256 = Data.Hash(zip), bytes = new FileInfo(zip).Length, entries = entries });
+            DedicatedLibrary.ValidateRelease(release);
+            var normalized = DedicatedLibrary.NormalizeOdysseyLayout(release);
+            Check(normalized.files.Count == 3 && normalized.packages.Single().entries.Count == 3 &&
+                normalized.files.All(f => f.path.StartsWith("Maps/Odyssey/", StringComparison.OrdinalIgnoreCase) &&
+                    f.path.Split('/').Length == 3) &&
+                normalized.launches.All(l => l.path == "Maps/Odyssey/Odyssey Campaign Launcher.SC2Map") &&
+                !DedicatedLibrary.HasLegacyOdysseyLayout(normalized),
+                "pinned Odyssey manifest wrapper folders flatten to sibling maps and one identical launcher");
+            var differing = Data.Json.Deserialize<DedicatedRelease>(Data.Json.Serialize(release));
+            differing.files.Last().sha256 = new string('b', 64);
+            Reject(() => DedicatedLibrary.NormalizeOdysseyLayout(differing),
+                "different Odyssey act launcher bytes cannot be silently merged");
+            // Simulate the state written by the older installer without moving
+            // any real game files. Reinstall must migrate, then remain removable.
+            for (int i = 0; i < originalPaths.Length; i++)
+            {
+                string destination = Data.Under(game, originalPaths[i]);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                File.WriteAllBytes(destination, bytes[i]);
+            }
+            var old = new DedicatedState { gameRoot = game,
+                installed = new List<DedicatedInstalled> { new DedicatedInstalled {
+                    id = release.id, version = release.version, manifestSha256 = Stamp, release = release } },
+                originals = originalPaths.Select(path => new DedicatedOriginal { path = path }).ToList() };
+            Data.Write(Path.Combine(storage, "dedicated/installed.json"), old);
+            var library = new DedicatedLibrary(storage);
+            var card = new Campaign { id = "odyssey-ko", kind = "dedicated" };
+            Check(library.NeedsRepair(card), "existing nested Odyssey install is marked repair-needed even with intact old files");
+            library.InstallArchives(release, Stamp, new[] { zip }, game, null, CancellationToken.None);
+            Check(!library.NeedsRepair(card) && library.Current().installed.Single().release.files.Count == 3 &&
+                normalized.files.All(f => File.Exists(Data.Under(game, f.path)) && Data.Hash(Data.Under(game, f.path)) == f.sha256) &&
+                originalPaths.All(path => !File.Exists(Data.Under(game, path))) &&
+                library.LaunchInfo(card, game, 1).Arguments == library.LaunchInfo(card, game, 2).Arguments,
+                "Odyssey reinstall migrates old nested maps to direct Maps/Odyssey paths with verified contents");
+            library.InstallArchives(release, Stamp, new[] { zip }, game, null, CancellationToken.None);
+            Check(library.Current().installed.Count == 1, "Odyssey normalized reinstallation stays idempotent");
+            library.Uninstall(card.id, game);
+            Check(normalized.files.All(f => !File.Exists(Data.Under(game, f.path))) &&
+                File.ReadAllText(bank) == "bank-unchanged" && File.ReadAllText(save) == "save-unchanged",
+                "Odyssey uninstall leaves preserved Bank/Save fixtures intact");
         }
         static void VerifyCinematicsVariants(string root)
         {

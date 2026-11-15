@@ -404,6 +404,99 @@ namespace CampaignHangar
                     installed=true,kind="ccm",author="QA",img="assets/hangar.jpg"}
             };
             await hubWeb.ExecuteScriptAsync("UiLab.setRealCampaigns("+Data.Json.Serialize(rows)+",2);UiLab.setView('all');");
+            string spaceOptions=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
+                var ui=window.UiLab,logo=document.querySelector('.sidebar-logo'),
+                    emblem=logo.querySelector('.brand-symbol');
+                function leftInset(){
+                    return emblem.getBoundingClientRect().left-logo.getBoundingClientRect().left;
+                }
+                ui.setThemeFromHost('terran');
+                var terranInset=leftInset();
+                ui.setThemeFromHost('zerg');
+                var zergInset=leftInset();
+                if(Math.abs(terranInset-zergInset)>5 || zergInset>12)
+                    return 'zerg-logo-inset:'+terranInset+'/'+zergInset;
+                if(getComputedStyle(logo.querySelector('.logo-copy')).alignItems!=='flex-start')
+                    return 'zerg-logo-copy-alignment';
+                ui.setView('all');
+                document.getElementById('workspace').scrollTop=0;
+                var hero=document.getElementById('hero');
+                var originalTop=hero.getBoundingClientRect().top;
+                ui.setView('settings');
+                var themes=document.getElementById('themeVisibilityToggle'),
+                    top=document.getElementById('topSummaryToggle'),
+                    buttons=document.querySelector('.sidebar>.theme-switcher'),
+                    caption=document.querySelector('.sidebar>.themes-caption'),
+                    header=document.querySelector('#workspace>.workspace-header'),
+                    activation=document.getElementById('activationReadout'),
+                    settingsNav=document.querySelector('.settings-nav [data-view=settings]');
+                if(!themes||!top||!settingsNav || getComputedStyle(settingsNav).display==='none')
+                    return 'visibility-controls-unavailable';
+                themes.click();
+                if(document.body.dataset.hideThemes!=='true' ||
+                   getComputedStyle(buttons).display!=='none'||
+                   getComputedStyle(caption).display!=='none'||
+                   themes.getAttribute('aria-pressed')!=='true' ||
+                   themes.querySelector('strong').textContent!=='테마 버튼 다시 표시')
+                    return 'themes-not-hidden';
+                top.click();
+                if(document.body.dataset.hideTop!=='true' ||
+                   getComputedStyle(header).display!=='none' ||
+                   getComputedStyle(activation).display!=='none' ||
+                   top.getAttribute('aria-pressed')!=='true')
+                    return 'header-not-hidden';
+                ui.setView('all');
+                document.getElementById('workspace').scrollTop=0;
+                if(originalTop-hero.getBoundingClientRect().top<35)
+                    return 'no-thumbnail-space-gained:'+originalTop+'/'+hero.getBoundingClientRect().top;
+                if(document.querySelector('.settings-nav [data-view=settings]').getBoundingClientRect().height<24)
+                    return 'cannot-reopen-settings';
+                return 'ok';
+            })()"));
+            if(spaceOptions!="ok")
+                throw new InvalidOperationException("Independent display optimization regression: "+spaceOptions);
+            using(var screenshot=File.Create(Path.Combine(output,"zerg-logo-top-hidden.png")))
+                await hubWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,screenshot);
+            await hubWeb.ExecuteScriptAsync("UiLab.setView('settings')");
+            using(var screenshot=File.Create(Path.Combine(output,"display-optimization-buttons.png")))
+                await hubWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,screenshot);
+            await Task.Delay(220);
+            var preferencePath=Path.Combine(root+"-profile","ui-theme.json");
+            var persisted=new UiLookStore(preferencePath).Value;
+            if(uiLook==null||!uiLook.Value.hideThemeButtons||!uiLook.Value.hideTopSummary||
+               !persisted.hideThemeButtons||!persisted.hideTopSummary)
+                throw new InvalidOperationException("Two independent visibility preferences were not stored natively.");
+            string restoredOptions=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
+                var ui=window.UiLab,
+                    themes=document.getElementById('themeVisibilityToggle'),
+                    top=document.getElementById('topSummaryToggle'),
+                    chooser=document.querySelector('.sidebar>.theme-switcher'),
+                    header=document.querySelector('#workspace>.workspace-header');
+                ui.setView('settings');
+                themes.click();
+                if(document.body.dataset.hideThemes!=='false' ||
+                   getComputedStyle(chooser).display==='none'||
+                   getComputedStyle(header).display!=='none')return 'themes-not-restored-independently';
+                themes.click();
+                top.click();
+                if(document.body.dataset.hideTop!=='false' ||
+                   getComputedStyle(header).display==='none'||
+                   getComputedStyle(chooser).display!=='none')return 'header-not-restored-independently';
+                themes.click();
+                ui.setThemeFromHost('terran');
+                ui.setView('all');
+                if(themes.getAttribute('aria-pressed')!=='false' ||
+                   top.getAttribute('aria-pressed')!=='false')return 'button-state-not-restored';
+                return 'ok';
+            })()"));
+            if(restoredOptions!="ok")
+                throw new InvalidOperationException("Display optimization restore regression: "+restoredOptions);
+            await Task.Delay(220);
+            persisted=new UiLookStore(preferencePath).Value;
+            if(uiLook.Value.hideThemeButtons||uiLook.Value.hideTopSummary||
+               persisted.hideThemeButtons||persisted.hideTopSummary)
+                throw new InvalidOperationException("Restored visibility choices were not saved.");
+            Console.WriteLine("WEBVIEW DISPLAY SPACE PASS: Zerg logo left aligned, independent theme/top hide and restore, thumbnail space increased, native persisted readback.");
             // The action rail itself may be resized by a custom layout even
             // if the desktop window remains wide. Verify labels and icons at
             // the actual allocated rail width rather than viewport alone.
@@ -411,7 +504,7 @@ namespace CampaignHangar
             await Task.Delay(180);
             var compactActions=Data.Json.DeserializeObject(await hubWeb.ExecuteScriptAsync(@"(function(){
                 var rail=document.querySelector('.action-strip'),items=[...rail.querySelectorAll('.action-button')];
-                var expected=['적용','설치','정보','스샷','리뷰','추천','ZIP'];
+                var expected=['적용','관리','정보','스샷','리뷰','추천','ZIP'];
                 return rail.dataset.compactActions==='true' && items.length===7 &&
                   items.every(function(item,i){
                     var short=item.querySelector('.action-label-compact');
@@ -456,6 +549,144 @@ namespace CampaignHangar
             }
             await hubWeb.ExecuteScriptAsync("document.querySelector('.action-strip').style.removeProperty('width')");
             Console.WriteLine("WEBVIEW RESPONSIVE ACTIONS PASS: allocated-width abbreviations, 7 icons, full tooltips and full labels restored.");
+            string quickMenu=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
+                var u=UiLab,f=HangarFeatures,menu=document.getElementById('actionContextMenu'),
+                    rail=document.querySelector('.action-strip'),
+                    blank=document.querySelector('.campaign-list-region');
+                u.setThemeFromHost('terran');u.setView('all');
+                if(f.getHiddenActionIds().length)return 'fixture-not-clean';
+                function right(node,x,y){
+                    node.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,
+                        clientX:x||310,clientY:y||230,button:2}));
+                }
+                var a=document.getElementById('screenshotButton'),b=document.getElementById('installButton');
+                right(a);
+                var hide=menu.querySelector('[data-action-choice=hide][data-action-id=screenshotButton]');
+                if(menu.hidden||!hide)return 'button-right-click-menu';
+                hide.click();
+                if(!a.hidden||f.getHiddenActionIds().indexOf(a.id)<0)return 'screenshot-not-hidden';
+                right(b);
+                hide=menu.querySelector('[data-action-choice=hide][data-action-id=installButton]');
+                if(!hide)return 'second-button-menu';
+                hide.click();
+                if(!b.hidden||f.getHiddenActionIds().length!==2)return 'second-button-hide';
+                right(blank);
+                var opts=[...menu.querySelectorAll('[data-action-choice=restore]')];
+                if(menu.hidden||opts.length!==2||
+                   opts[0].dataset.actionId!=='installButton'||
+                   opts[1].dataset.actionId!=='screenshotButton')return 'saved-action-order';
+                u.setThemeFromHost('zerg');
+                if(f.getHiddenActionIds().length||a.hidden||b.hidden)return 'theme-scoping';
+                u.setThemeFromHost('terran');
+                if(!a.hidden||!b.hidden||f.getHiddenActionIds().length!==2)return 'theme-return';
+                right(blank);
+                if(menu.querySelectorAll('[data-action-choice=restore]').length!==2)return 'blank-restoration-menu';
+                return 'ok';
+            })()"));
+            if(quickMenu!="ok")throw new InvalidOperationException("Quick-action context hide: "+quickMenu);
+            using(var png=File.Create(Path.Combine(output,"quick-action-hidden-menu.png")))
+                await hubWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,png);
+            bool hiddenSaved=false;
+            for(int attempt=0;attempt<30&&!hiddenSaved;attempt++)
+            {
+                await Task.Delay(100);
+                if(!File.Exists(hubLayoutFile))continue;
+                var saved=CleanHubProfiles(File.ReadAllText(hubLayoutFile,Encoding.UTF8));
+                var terran=saved["terran"].layout.hiddenElements??new string[0];
+                var zerg=saved["zerg"].layout.hiddenElements??new string[0];
+                hiddenSaved=terran.Contains("installButton")&&terran.Contains("screenshotButton")&&
+                    !zerg.Contains("installButton")&&!zerg.Contains("screenshotButton");
+            }
+            if(!hiddenSaved)throw new InvalidOperationException("Hidden quick actions were not saved to isolated native theme profile.");
+            await PushHubLayouts();
+            var reread=Data.Json.Deserialize<bool>(await hubWeb.ExecuteScriptAsync(@"(function(){
+                var f=HangarFeatures,ids=f.getHiddenActionIds();
+                return ids.length===2&&ids.includes('installButton')&&
+                    ids.includes('screenshotButton')&&
+                    document.getElementById('installButton').hidden&&
+                    document.getElementById('screenshotButton').hidden;
+            })()"));
+            if(!reread)throw new InvalidOperationException("Quick-action hidden choices did not survive host layout reload.");
+            string restoredMenu=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
+                var u=UiLab,f=HangarFeatures,blank=document.querySelector('.campaign-list-region'),
+                    menu=document.getElementById('actionContextMenu');
+                var ids=['launchButton','installButton','detailButton','screenshotButton',
+                    'reviewButton','recommendButton','importZipButton'];
+                ids.forEach(function(id){f.setActionHidden(id,true);});
+                if(f.getHiddenActionIds().length!==7||
+                   ids.some(function(id){return !document.getElementById(id).hidden;}))
+                    return 'all-hidden-state';
+                function right(node){
+                    node.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,
+                        clientX:340,clientY:255,button:2}));
+                }
+                right(blank);
+                if(menu.hidden||menu.querySelectorAll('[data-action-choice=restore]').length!==7)
+                    return 'all-hidden-recovery-menu';
+                ids.forEach(function(id){
+                    right(blank);
+                    var button=menu.querySelector('[data-action-choice=restore][data-action-id='+id+']');
+                    if(button)button.click();
+                });
+                if(f.getHiddenActionIds().length||ids.some(function(id){
+                    return document.getElementById(id).hidden;}))return 'restore-all';
+                var card=document.querySelector('[data-card=hide-qa-b]');
+                if(!card)return 'card-missing';
+                right(card);
+                var cardMenu=document.getElementById('cardContextMenu'),
+                    actions=[...cardMenu.querySelectorAll('[data-card-action]')].map(function(n){return n.dataset.cardAction;});
+                if(cardMenu.hidden||actions.slice(0,3).join(',')!=='apply,manage,detail')
+                    return 'card-menu-order';
+                cardMenu.querySelector('[data-card-action=manage]').click();
+                if(document.getElementById('manageOverlay').hidden||
+                   document.getElementById('manageOverlay').dataset.campaignId!=='hide-qa-b')
+                    return 'card-manage-route';
+                f.closeManage();
+                var detail=document.getElementById('detailButton'),original=detail.click,called=0;
+                detail.click=function(){called++;};
+                try{
+                    right(card);cardMenu.querySelector('[data-card-action=detail]').click();
+                }finally{detail.click=original;}
+                if(called!==1||u.getSelected().id!=='hide-qa-b')return 'card-detail-route';
+                var savedProfiles=f.getProfiles(),temporary=JSON.parse(JSON.stringify(savedProfiles));
+                temporary.terran.layout.presentation='contact';
+                f.applyHostProfiles(temporary);u.setView('all');
+                var contactCard=document.querySelector('#contactGrid [data-contact-id=hide-qa-b]');
+                if(!contactCard)return 'contact-card-missing';
+                right(contactCard);
+                if(cardMenu.hidden||cardMenu.querySelector('[data-card-action=manage]')===null||
+                   cardMenu.querySelector('[data-card-action=detail]')===null)
+                    return 'contact-card-context';
+                f.applyHostProfiles(savedProfiles);u.setView('all');
+                var rail=document.querySelector('.action-strip');
+                rail.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,
+                    key:'F10',shiftKey:true}));
+                if(menu.hidden||menu.querySelector('.quick-action-menu-empty')===null)
+                    return 'keyboard-empty-restore-menu';
+                document.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'Escape'}));
+                if(!menu.hidden)return 'escape-close';
+                return 'ok';
+            })()"));
+            if(restoredMenu!="ok")throw new InvalidOperationException("Quick-action full recovery and card menu: "+restoredMenu);
+            bool restoredSaved=false;
+            for(int attempt=0;attempt<30&&!restoredSaved;attempt++)
+            {
+                await Task.Delay(100);
+                if(!File.Exists(hubLayoutFile))continue;
+                var saved=CleanHubProfiles(File.ReadAllText(hubLayoutFile,Encoding.UTF8));
+                restoredSaved=!(saved["terran"].layout.hiddenElements??new string[0]).Any(id=>
+                    new[] {"launchButton","installButton","detailButton","screenshotButton",
+                        "reviewButton","recommendButton","importZipButton"}.Contains(id));
+            }
+            if(!restoredSaved)throw new InvalidOperationException("Restored quick-action visibility was not persisted.");
+            await hubWeb.ExecuteScriptAsync(@"UiLab.setView('all');
+                document.querySelector('[data-card=hide-qa-b]').dispatchEvent(
+                    new MouseEvent('contextmenu',{bubbles:true,cancelable:true,
+                        clientX:480,clientY:280,button:2}));");
+            using(var png=File.Create(Path.Combine(output,"campaign-card-context-actions.png")))
+                await hubWeb.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png,png);
+            await hubWeb.ExecuteScriptAsync("document.getElementById('cardContextMenu').hidden=true");
+            Console.WriteLine("WEBVIEW QUICK ACTION MENU PASS: seven buttons hide/restore, blank-area and keyboard recovery, order and theme isolation, native readback, card manage/detail routing.");
             string behavior=Data.Json.Deserialize<string>(await hubWeb.ExecuteScriptAsync(@"(function(){
                 var ui=UiLab,root=document,hidden=root.getElementById('showHiddenCampaigns');
                 var buttons=[...root.querySelectorAll('.action-strip>.action-button')].map(b=>b.id);
@@ -3392,7 +3623,9 @@ namespace CampaignHangar
                     theme = LiveTheme.Current.Id,
                     browseWhileWorking = uiLook.Value.browseWhileWorking,
                     reducedMotion = uiLook.Value.reducedMotion,
-                    highContrast = uiLook.Value.highContrast
+                    highContrast = uiLook.Value.highContrast,
+                    hideThemeButtons = uiLook.Value.hideThemeButtons,
+                    hideTopSummary = uiLook.Value.hideTopSummary
                 });
                 await hubWeb.ExecuteScriptAsync("window.UiLab.applyLivePreferences(" + json + ")");
             }
@@ -3884,6 +4117,10 @@ namespace CampaignHangar
                 else if (setting == "motion:0") uiLook.Value.reducedMotion = false;
                 else if (setting == "contrast:1") uiLook.Value.highContrast = true;
                 else if (setting == "contrast:0") uiLook.Value.highContrast = false;
+                else if (setting == "hide-themes:1") uiLook.Value.hideThemeButtons = true;
+                else if (setting == "hide-themes:0") uiLook.Value.hideThemeButtons = false;
+                else if (setting == "hide-top:1") uiLook.Value.hideTopSummary = true;
+                else if (setting == "hide-top:0") uiLook.Value.hideTopSummary = false;
                 else return;
                 uiLook.Save();
                 UpdateHubWorkState();

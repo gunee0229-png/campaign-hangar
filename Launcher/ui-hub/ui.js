@@ -66,6 +66,7 @@
   var state = {
     theme:"terran", selected:"revolite", view:"all", favorites:new Set(["revolite"]),
     favoritesOnly:false, search:"", category:"all", sort:"playtime", mode:"grid", contrast:false, reduceMotion:false,
+    hideThemeButtons:false, hideTopSummary:false,
     hiddenCampaignIds:new Set(),showHiddenCampaigns:false
   };
   if (liveMode) state.favorites = new Set();
@@ -331,6 +332,24 @@
     var button=el(id),caption=button.querySelector("strong");
     if(caption)caption.textContent=value;else button.textContent=value;
   }
+  function refreshSpaceOptions(){
+    // These independent visibility choices affect only the presentation.
+    // Never remove the settings navigation or the window titlebar controls.
+    document.body.dataset.hideThemes=String(state.hideThemeButtons);
+    document.body.dataset.hideTop=String(state.hideTopSummary);
+    setOptionLabel("themeVisibilityToggle",state.hideThemeButtons?"테마 버튼 다시 표시":"테마 버튼 숨기기");
+    setOptionLabel("topSummaryToggle",state.hideTopSummary?"최상단 다시 표시":"최상단 닫기");
+    el("themeVisibilityToggle").setAttribute("aria-pressed",String(state.hideThemeButtons));
+    el("topSummaryToggle").setAttribute("aria-pressed",String(state.hideTopSummary));
+  }
+  function saveLocalSpaceOptions(){
+    if(liveMode)return;
+    try {
+      localStorage.setItem("campaign-hangar-space-options",JSON.stringify({
+        hideThemeButtons:state.hideThemeButtons,hideTopSummary:state.hideTopSummary
+      }));
+    }catch(_){}
+  }
   function showNotificationCount(count){
     var n=el("sidebarNotificationCount"),value=Math.max(0,Number(count)||0);
     n.hidden=value===0;n.textContent=value>99?"99+":String(value);
@@ -413,8 +432,59 @@
   }
   var cardContextId="";
   function hideCardMenu(){cardContextId="";el("cardContextMenu").hidden=true;}
+  function hideActionContextMenu(){
+    var menu=el("actionContextMenu");
+    if(!menu)return;
+    menu.hidden=true;
+    menu.replaceChildren();
+  }
+  function showActionContextMenu(kind,id,x,y,keyboard){
+    var features=window.HangarFeatures,menu=el("actionContextMenu");
+    if(!features||!menu)return false;
+    var hidden=features.getHiddenActionIds();
+    if(kind==="hide"&&hidden.indexOf(id)>=0)return false;
+    hideCardMenu();hideActionContextMenu();
+    var heading=document.createElement("strong");
+    heading.className="quick-action-menu-heading";
+    heading.textContent=kind==="hide"?"작업 버튼 관리":"숨긴 작업 버튼 · "+hidden.length+"개";
+    menu.appendChild(heading);
+    function item(actionId,hide){
+      var button=el(actionId),label=button?button.getAttribute("aria-label")||button.title:actionId;
+      if(!button)return;
+      var option=document.createElement("button");
+      option.type="button";
+      option.setAttribute("role","menuitem");
+      option.textContent=hide?"‘"+label+"’ 숨기기":"다시 표시 · "+label;
+      option.dataset.actionChoice=hide?"hide":"restore";
+      option.dataset.actionId=actionId;
+      option.addEventListener("click",function(){
+        hideActionContextMenu();
+        if(features.setActionHidden(actionId,hide)){
+          toast(hide?"‘"+label+"’ 버튼을 숨겼습니다. 빈 화면을 우클릭하면 다시 표시할 수 있습니다.":
+            "‘"+label+"’ 버튼을 다시 표시했습니다.");
+          if(keyboard&&!hide)button.focus();
+          else if(keyboard)document.querySelector(".action-strip").focus();
+        }
+      });
+      menu.appendChild(option);
+    }
+    if(kind==="hide")item(id,true);
+    else if(hidden.length)hidden.forEach(function(actionId){item(actionId,false);});
+    else {
+      var empty=document.createElement("span");
+      empty.className="quick-action-menu-empty";
+      empty.textContent="숨긴 작업 버튼이 없습니다.";
+      menu.appendChild(empty);
+    }
+    menu.hidden=false;
+    menu.style.left=Math.max(8,Math.min(window.innerWidth-menu.offsetWidth-8,x))+"px";
+    menu.style.top=Math.max(8,Math.min(window.innerHeight-menu.offsetHeight-8,y))+"px";
+    if(keyboard){var first=menu.querySelector('[role="menuitem"]');if(first)first.focus();}
+    return true;
+  }
   function showCardMenu(id,x,y){
     if(!campaigns.some(function(c){return c.id===id;}))return;
+    hideActionContextMenu();
     cardContextId=id;var menu=el("cardContextMenu");menu.hidden=false;
     var maxX=Math.max(8,window.innerWidth-menu.offsetWidth-10);
     var maxY=Math.max(8,window.innerHeight-menu.offsetHeight-10);
@@ -845,6 +915,7 @@
     }
     if (["archive", "all", "installed", "wol", "hots", "lotv", "nova", "dedicated", "favorites", "settings"].indexOf(view) < 0) return false;
     hideCardMenu();
+    hideActionContextMenu();
     var changed = state.view !== view;
     if(changed&&!fromHistory){viewHistory.push(state.view);if(viewHistory.length>24)viewHistory.shift();}
     state.view = view;
@@ -1022,6 +1093,9 @@
     motion.setAttribute("aria-pressed",String(state.reduceMotion));
     setOptionLabel("contrastToggle",state.contrast?"고대비 끄기":"고대비 켜기");
     contrast.setAttribute("aria-pressed",String(state.contrast));
+    if (typeof prefs.hideThemeButtons==="boolean") state.hideThemeButtons=prefs.hideThemeButtons;
+    if (typeof prefs.hideTopSummary==="boolean") state.hideTopSummary=prefs.hideTopSummary;
+    refreshSpaceOptions();
     if (prefs.theme && THEMES[prefs.theme] && state.theme!==prefs.theme)
       setTheme(prefs.theme,false,true);
     return true;
@@ -1087,11 +1161,33 @@
         var id=cardContextId,action=button.dataset.cardAction;hideCardMenu();
         if(!id)return;
         if(action==="visibility"){toggleCardHidden(id);return;}
+        // Reuse the exact existing handlers, even if a quick-action button
+        // was hidden by the user. This avoids a second install/detail path.
+        if(action==="manage"){if(selectCampaign(id))el("installButton").click();return;}
+        if(action==="detail"){if(selectCampaign(id))el("detailButton").click();return;}
         if(liveMode)sendHost("manage-action:"+action+":"+id);
         else toast("컨텍스트 메뉴는 실제 개발판에서 작동합니다.");
       });
     });
-    document.addEventListener("pointerdown",function(e){if(!e.target.closest("#cardContextMenu"))hideCardMenu();});
+    document.addEventListener("pointerdown",function(e){
+      if(!e.target.closest("#cardContextMenu"))hideCardMenu();
+      if(!e.target.closest("#actionContextMenu"))hideActionContextMenu();
+    });
+    document.addEventListener("contextmenu",function(e){
+      if(e.defaultPrevented)return;
+      var target=e.target,action=target.closest(".action-button");
+      if(action&&(action.closest(".action-strip")||action.closest("[data-free-action]"))){
+        e.preventDefault();e.stopPropagation();
+        showActionContextMenu("hide",action.id,e.clientX,e.clientY,false);
+        return;
+      }
+      if(state.view==="settings"||state.view==="archive"||!target.closest("#workspace"))return;
+      if(target.closest("button,a,input,textarea,select,[role='button'],[contenteditable],"+
+        ".campaign-card,.contact-campaign,.contact-cell,.catalog-toolbar,.detail-panel,"+
+        ".layout-editor,.manage-overlay,.record-overlay,#cardContextMenu,#actionContextMenu"))return;
+      e.preventDefault();e.stopPropagation();
+      showActionContextMenu("restore","",e.clientX,e.clientY,false);
+    });
     document.querySelectorAll("[data-view]").forEach(function (b) {
       b.addEventListener("click", function () { setView(b.dataset.view); });
     });
@@ -1101,6 +1197,13 @@
     el("contactGrid").addEventListener("click",function(e){
       var button=e.target.closest("[data-contact-id]");
       if(button){selectCampaign(button.dataset.contactId);return;}
+    });
+    el("contactGrid").addEventListener("contextmenu",function(e){
+      var button=e.target.closest("[data-contact-id]");
+      if(!button)return;
+      e.preventDefault();e.stopPropagation();
+      if(selectCampaign(button.dataset.contactId))
+        showCardMenu(button.dataset.contactId,e.clientX,e.clientY);
     });
     // Mouse XBUTTON1 (back/side button). WebView2 receives the gesture even
     // when the WinForms owner cannot see child-HWND mouse messages.
@@ -1229,6 +1332,18 @@
       resetSmoothScroll(el("campaignList").parentElement);
       if(liveMode) sendHost("settings:motion:"+(state.reduceMotion?"1":"0"));
     });
+    el("themeVisibilityToggle").addEventListener("click",function(){
+      state.hideThemeButtons=!state.hideThemeButtons;
+      refreshSpaceOptions();
+      saveLocalSpaceOptions();
+      if(liveMode)sendHost("settings:hide-themes:"+(state.hideThemeButtons?"1":"0"));
+    });
+    el("topSummaryToggle").addEventListener("click",function(){
+      state.hideTopSummary=!state.hideTopSummary;
+      refreshSpaceOptions();
+      saveLocalSpaceOptions();
+      if(liveMode)sendHost("settings:hide-top:"+(state.hideTopSummary?"1":"0"));
+    });
     el("bootBrowse").addEventListener("click",function(){if(hostWorkDisplayed)showWorkBrowse(!workBrowsing);});
     el("workBrowseToggle").addEventListener("click",function(){
       workBrowseDefault=!workBrowseDefault;
@@ -1243,6 +1358,16 @@
     el("dragZone").addEventListener("mousedown",function(e) { if(e.button===0) sendHost("drag"); });
     el("dragZone").addEventListener("dblclick",function () { sendHost("maximize"); });
     document.addEventListener("keydown",function(e) {
+      if(e.key==="Escape"&&!el("actionContextMenu").hidden){
+        e.preventDefault();e.stopPropagation();hideActionContextMenu();return;
+      }
+      if((e.key==="ContextMenu"||(e.shiftKey&&e.key==="F10"))&&
+         e.target.closest(".action-strip,[data-free-action]")){
+        var target=e.target.closest(".action-button"),box=e.target.getBoundingClientRect();
+        e.preventDefault();e.stopPropagation();
+        showActionContextMenu(target?"hide":"restore",target?target.id:"",
+          box.left+Math.min(24,box.width/2),box.bottom+4,true);return;
+      }
       if(e.altKey&&e.key==="ArrowLeft"){e.preventDefault();navigateBack();return;}
       if ((e.key==="/" || e.key==="Divide") &&
           ["INPUT","TEXTAREA"].indexOf(document.activeElement.tagName)===-1) {
@@ -1378,6 +1503,8 @@
   document.addEventListener("DOMContentLoaded",function () {
     bindEvents();
     if(!liveMode)try{setHiddenCampaignIds(JSON.parse(localStorage.getItem("campaign-hangar-hidden-cards")||"[]"));}catch(_){}
+    if(!liveMode)try{applyLivePreferences(JSON.parse(localStorage.getItem("campaign-hangar-space-options")||"{}"));}catch(_){}
+    refreshSpaceOptions();
     installActionIcons();
     observeCompactActionLabels();
     if (window.HangarFeatures) window.HangarFeatures.init({

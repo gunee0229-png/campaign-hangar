@@ -2080,7 +2080,9 @@ namespace CampaignHangar
         }
         Task<bool> ApplyInstalled(Campaign item)
         {
-            if (item.kind == "dedicated") return dedicatedLibrary.IsInstalled(item) ? PlayDedicated(item) : InstallDedicated(item);
+            if (item.kind == "dedicated")
+                return !dedicatedLibrary.IsInstalled(item) || dedicatedLibrary.NeedsRepair(item)
+                    ? InstallDedicated(item) : PlayDedicated(item);
             return item.kind == "external" ? LaunchExternal(item) : ApplyInstalledVersion(item, item.versionKey);
         }
         public static bool DedicatedAction(string url, out string action, out string id)
@@ -2179,6 +2181,10 @@ namespace CampaignHangar
         async Task<bool> PlayDedicated(Campaign item, int episode = 0)
         {
             if (busy || distributionView.DownloadInProgress) return false;
+            // A legacy Odyssey install still points to the act subfolders.
+            // Reinstall into the corrected shared folder before attempting a
+            // launcher that would fail to resolve its sibling mission maps.
+            if (dedicatedLibrary.NeedsRepair(item)) return await InstallDedicated(item);
             try
             {
                 ExternalCampaigns.RequireGameClosed(game.Text);

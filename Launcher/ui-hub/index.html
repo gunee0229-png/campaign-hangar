@@ -195,9 +195,9 @@
         <div class="hero-bottomline"><span class="scan-light"></span><span>CAMPAIGN DATA LINK ESTABLISHED</span><span>NO LIVE GAME CONNECTION</span></div>
       </section>
 
-      <section class="action-strip" aria-label="선택된 캠페인 작업">
+      <section class="action-strip" aria-label="선택된 캠페인 작업 · 빈 영역에서 우클릭 또는 메뉴 키로 숨긴 버튼 복원" tabindex="0" title="빈 영역을 우클릭하면 숨긴 작업 버튼을 다시 표시할 수 있습니다.">
         <button class="action-button action-primary" id="launchButton" type="button" aria-label="캠페인 적용" title="캠페인 적용"><span class="action-icon">▶</span><span class="action-label-full" id="primaryActionText">캠페인 적용</span><span class="action-label-compact" id="primaryActionShort" aria-hidden="true">적용</span><small>테스트 안내</small></button>
-        <button class="action-button" id="installButton" type="button" aria-label="설치·관리" title="설치·관리"><span class="action-icon">⇩</span><span class="action-label-full">설치·관리</span><span class="action-label-compact" aria-hidden="true">설치</span><small>테스트 안내</small></button>
+        <button class="action-button" id="installButton" type="button" aria-label="설치·관리" title="설치·관리"><span class="action-icon">⇩</span><span class="action-label-full">설치·관리</span><span class="action-label-compact" aria-hidden="true">관리</span><small>테스트 안내</small></button>
         <button class="action-button" id="detailButton" type="button" aria-label="상세 정보 보기" title="상세 정보 보기"><span class="action-icon">▤</span><span class="action-label-full">상세 정보 보기</span><span class="action-label-compact" aria-hidden="true">정보</span></button>
         <button class="action-button" id="screenshotButton" type="button" aria-label="스크린샷 관리" title="스크린샷 관리"><span class="action-icon"></span><span class="action-label-full">스크린샷 관리</span><span class="action-label-compact" aria-hidden="true">스샷</span></button>
         <button class="action-button" id="reviewButton" type="button" aria-label="리뷰 달기" title="리뷰 달기"><span class="action-icon">▤</span><span class="action-label-full">리뷰 달기</span><span class="action-label-compact" aria-hidden="true">리뷰</span></button>
@@ -272,6 +272,8 @@
             <button type="button" id="contrastToggle" class="optimization-option" aria-pressed="false"><span class="optimization-glyph" aria-hidden="true">◐</span><strong>고대비 켜기</strong><small>화면 가독성</small></button>
             <button type="button" id="workBrowseToggle" class="optimization-option" aria-pressed="false"><span class="optimization-glyph" aria-hidden="true">▣</span><strong>작업 진행: 전체 화면</strong><small>캠페인 작업의 진행 화면만 선택합니다. 테마 전환 로딩은 유지됩니다.</small></button>
             <button type="button" id="motionToggle" class="optimization-option" aria-pressed="false"><span class="optimization-glyph" aria-hidden="true">≋</span><strong>모션 줄이기</strong><small>애니메이션 최소화</small></button>
+            <button type="button" id="themeVisibilityToggle" class="optimization-option" aria-pressed="false" title="왼쪽 테란·프로토스·저그·노바 테마 선택 영역을 숨깁니다. 화면 설정에서 다시 표시할 수 있습니다."><span class="optimization-glyph" aria-hidden="true">◫</span><strong>테마 버튼 숨기기</strong><small>왼쪽 테마 선택 영역 접기 · 다시 표시 가능</small></button>
+            <button type="button" id="topSummaryToggle" class="optimization-option" aria-pressed="false" title="캠페인 썸네일 위의 제목·통계·적용 정보 영역을 접습니다. 화면 설정에서 다시 표시할 수 있습니다."><span class="optimization-glyph" aria-hidden="true">▱</span><strong>최상단 닫기</strong><small>썸네일 위 제목·통계 접고 공간 넓히기</small></button>
           </div>
         </section>
         <div class="setting-grid">
@@ -329,10 +331,14 @@
   </div>
   <div id="cardContextMenu" class="card-context-menu" role="menu" hidden>
     <button type="button" role="menuitem" data-card-action="apply">적용</button>
+    <button type="button" role="menuitem" data-card-action="manage">설치·관리</button>
+    <button type="button" role="menuitem" data-card-action="detail">상세 정보 보기</button>
     <button type="button" role="menuitem" data-card-action="remove">삭제</button>
     <button type="button" role="menuitem" data-card-action="update">업데이트</button>
     <button type="button" role="menuitem" data-card-action="visibility">캠페인 숨기기</button>
   </div>
+  <div id="actionContextMenu" class="card-context-menu quick-action-context-menu" role="menu"
+    aria-label="작업 버튼 숨김 및 복원" hidden></div>
   <div class="manage-overlay" id="manageOverlay" hidden>
     <div class="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="manageTitle">
       <div class="manage-dialog-heading"><span>CAMPAIGN OPERATIONS</span><button type="button" id="manageClose" aria-label="관리 패널 닫기">×</button></div>

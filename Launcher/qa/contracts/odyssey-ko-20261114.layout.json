@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "id": "odyssey-ko",
+  "manifestSha256": "280cfd140b2c0659708aa9214037554ab560e0df80548f18c3792076840dc9fe",
+  "gameFiles": [
+    "Maps/Odyssey/Odyssey Campaign Launcher.SC2Map",
+    "Maps/Odyssey/Act I Mission 01 - Hell's Rejects.SC2Map",
+    "Maps/Odyssey/Act I Mission 02 - Soldiers of the Federation.SC2Map",
+    "Maps/Odyssey/Act I Mission 03 - The Beast of Statbrough.SC2Map",
+    "Maps/Odyssey/Act I Mission 04 - Unwanted Guests.SC2Map",
+    "Maps/Odyssey/Act I Mission 05 - Clipped Wings Part 1.SC2Map",
+    "Maps/Odyssey/Act I Mission 06 - Clipped Wings Part 2.SC2Map",
+    "Maps/Odyssey/Act I Mission 07 - The Siege of Arkingston.SC2Map",
+    "Maps/Odyssey/Act I Mission 08 - The Federation Strikes Back.SC2Map",
+    "Maps/Odyssey/Act I Mission 09 - Rising Dread.SC2Map",
+    "Maps/Odyssey/Act I Mission 10 - Outrunning Death.SC2Map",
+    "Maps/Odyssey/Act I Mission 11 - What Lies Beneath.SC2Map",
+    "Maps/Odyssey/Act I Mission 12 - Falling From Grace.SC2Map",
+    "Maps/Odyssey/Act I Mission 13 - The Bigger They Are.SC2Map",
+    "Maps/Odyssey/Act I Mission 14 - Limitless.SC2Map",
+    "Maps/Odyssey/Act II Mission 01 - Invasion Day.SC2Map",
+    "Maps/Odyssey/Act II Mission 02 - The Enemy of my Enemy.SC2Map",
+    "Maps/Odyssey/Act II Mission 03 - On Shakier Grounds.SC2Map",
+    "Maps/Odyssey/Act II Mission 04 - The Frostfire Express.SC2Map",
+    "Maps/Odyssey/Act II Mission 05 - United We Stand.SC2Map",
+    "Maps/Odyssey/Act II Mission 06 - Divided We Fall.SC2Map",
+    "Maps/Odyssey/Act II Mission 07 - Into Darkness.SC2Map",
+    "Maps/Odyssey/Act II Mission 08 - The Lion's Den.SC2Map",
+    "Maps/Odyssey/Act II Mission 09 - Of Fire and Brimstone Part 1.SC2Map",
+    "Maps/Odyssey/Act II Mission 10 - Of Fire and Brimstone Part 2.SC2Map",
+    "Maps/Odyssey/Act II Mission 11 - Graveyard of Legends.SC2Map",
+    "Maps/Odyssey/Act II Mission 12 - Untamed, Unbroken, Unleashed.SC2Map",
+    "Maps/Odyssey/Act II Mission 13 - Cold Embrace.SC2Map"
+  ],
+  "launchMaps": [
+    "Maps/Odyssey/Odyssey Campaign Launcher.SC2Map",
+    "Maps/Odyssey/Odyssey Campaign Launcher.SC2Map"
+  ],
+  "siblingRequirements": [
+    {
+      "launcher": "Maps/Odyssey/Odyssey Campaign Launcher.SC2Map",
+      "files": [
+        "Maps/Odyssey/Act I Mission 01 - Hell's Rejects.SC2Map",
+        "Maps/Odyssey/Act II Mission 13 - Cold Embrace.SC2Map"
+      ]
+    }
+  ]
+}

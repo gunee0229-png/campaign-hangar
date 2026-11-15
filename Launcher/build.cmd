@@ -8,7 +8,7 @@ set "OUT=%~dp0bin-%CHANNEL%"
 if not "%~1"=="" set "OUT=%~f1"
 set "WV=%~dp0vendor\WebView2-1.0.4258.31"
 set "CSC_EXTRA=/define:%BUILD_SYMBOLS% /reference:C:\Windows\Microsoft.NET\Framework64\v4.0.30319\Microsoft.VisualBasic.dll /reference:C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Xaml.dll"
-set EXTRA="%~dp0LiveUiTheme.cs" "%~dp0LiveUiHub.cs" "%~dp0DistributionPolicy.cs" "%~dp0AppUpdate.cs" "%~dp0Notifications.cs" "%~dp0Activity.cs" "%~dp0ActivityChecks.cs" "%~dp0AuthorLauncherChecks.cs" "%~dp0EpisodeChecks.cs" "%~dp0StandaloneZip.cs" "%~dp0StandaloneConflicts.cs" "%~dp0StandaloneZipChecks.cs" "%~dp0Dedicated.cs" "%~dp0DedicatedChecks.cs" "%~dp0DedicatedVoiceDialog.cs" "%~dp0DedicatedVoiceChecks.cs"
+set EXTRA="%~dp0LiveUiTheme.cs" "%~dp0LiveUiHub.cs" "%~dp0DistributionPolicy.cs" "%~dp0AppUpdate.cs" "%~dp0Notifications.cs" "%~dp0Activity.cs" "%~dp0ActivityChecks.cs" "%~dp0AuthorLauncherChecks.cs" "%~dp0EpisodeChecks.cs" "%~dp0StandaloneZip.cs" "%~dp0StandaloneConflicts.cs" "%~dp0StandaloneZipChecks.cs" "%~dp0Dedicated.cs" "%~dp0DedicatedChecks.cs" "%~dp0DedicatedLayoutAudit.cs" "%~dp0DedicatedVoiceDialog.cs" "%~dp0DedicatedVoiceChecks.cs"
 if not exist "%OUT%" mkdir "%OUT%"
 xcopy /e /i /y "%~dp0bin\assets" "%OUT%\assets" >nul
 if errorlevel 1 exit /b %errorlevel%

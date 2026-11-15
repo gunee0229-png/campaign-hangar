@@ -136,6 +136,8 @@ namespace CampaignHangar
         public bool browseWhileWorking { get; set; }
         public bool reducedMotion { get; set; }
         public bool highContrast { get; set; }
+        public bool hideThemeButtons { get; set; }
+        public bool hideTopSummary { get; set; }
         public UiLookPreference() { theme = "terran"; }
     }
     internal sealed class UiLookStore

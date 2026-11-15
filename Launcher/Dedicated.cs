@@ -98,6 +98,94 @@ namespace CampaignHangar
         readonly Dictionary<string, DedicatedRelease> checkedReleases = new Dictionary<string, DedicatedRelease>();
         const string SwitchableCinematics = "Mods/SCMRcinematics.SC2Mod";
         static bool VariantPath(string path) { return String.Equals(path, SwitchableCinematics, StringComparison.OrdinalIgnoreCase); }
+        // The pinned Odyssey Korean ZIP contains act-specific packaging folders,
+        // but its launcher loads missions from Maps/Odyssey directly. The
+        // signed manifest preserves the ZIP entry names while this client
+        // normalizes only their installed destinations after SHA verification.
+        const string OdysseyTarget = "Maps/Odyssey/";
+        static readonly string[] OdysseyWrappers = {
+            "Maps/Odyssey/Odyssey Campaign Act I + Launcher/",
+            "Maps/Odyssey/Odyssey Campaign Act II 01-13 + Launcher/"
+        };
+        static string OdysseyGamePath(string path)
+        {
+            if (path == null) return null;
+            foreach (var wrapper in OdysseyWrappers)
+                if (path.StartsWith(wrapper, StringComparison.OrdinalIgnoreCase))
+                    return OdysseyTarget + path.Substring(wrapper.Length);
+            return path;
+        }
+        internal static bool HasLegacyOdysseyLayout(DedicatedRelease release)
+        {
+            return release != null && release.id == "odyssey-ko" && release.files != null &&
+                release.files.Any(f => f != null && !String.Equals(f.path, OdysseyGamePath(f.path), StringComparison.OrdinalIgnoreCase));
+        }
+        internal static DedicatedRelease NormalizeOdysseyLayout(DedicatedRelease release)
+        {
+            if (!HasLegacyOdysseyLayout(release)) return release;
+            ValidateRelease(release);
+            var fixedRelease = Data.Json.Deserialize<DedicatedRelease>(Data.Json.Serialize(release));
+            var unique = new Dictionary<string, DedicatedFile>(StringComparer.OrdinalIgnoreCase);
+            var normalized = new List<DedicatedFile>();
+            foreach (var file in fixedRelease.files)
+            {
+                string target = OdysseyGamePath(file.path);
+                DedicatedFile previous;
+                if (unique.TryGetValue(target, out previous))
+                {
+                    if (!String.Equals(target, OdysseyTarget + "Odyssey Campaign Launcher.SC2Map", StringComparison.OrdinalIgnoreCase) ||
+                        previous.bytes != file.bytes || !String.Equals(previous.sha256, file.sha256, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("오디세이 설치 파일 경로가 중복되거나 두 런처 내용이 다릅니다: " + target);
+                    continue;
+                }
+                file.path = target;
+                unique.Add(target, file);
+                normalized.Add(file);
+            }
+            fixedRelease.files = normalized;
+            var mapped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var bundle in fixedRelease.packages)
+            {
+                if (bundle.entries == null)
+                    throw new InvalidDataException("오디세이 ZIP의 원본 파일과 설치 경로 대응표가 없습니다.");
+                var entries = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var entry in bundle.entries)
+                {
+                    string target = OdysseyGamePath(entry.Value);
+                    if (!mapped.Add(target))
+                    {
+                        if (!String.Equals(target, OdysseyTarget + "Odyssey Campaign Launcher.SC2Map", StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("오디세이 ZIP 설치 경로가 중복됐습니다: " + target);
+                        // Both acts ship the same launcher bytes. Install one
+                        // verified copy and ignore the redundant ZIP member.
+                        continue;
+                    }
+                    entries.Add(entry.Key, target);
+                }
+                bundle.entries = entries;
+            }
+            foreach (var launch in fixedRelease.launches)
+                launch.path = OdysseyGamePath(launch.path);
+            ValidateRelease(fixedRelease);
+            return fixedRelease;
+        }
+        static void CleanupLegacyOdysseyEmptyFolders(string gameRoot)
+        {
+            // The transaction removed the previously owned map files. Only
+            // prune the two exact empty wrapper folders; never recurse or
+            // remove an unknown user file, folder, Bank or Save.
+            foreach (var wrapper in OdysseyWrappers)
+            {
+                string directory = Data.Under(gameRoot, wrapper.TrimEnd('/'));
+                try
+                {
+                    if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
+                        Directory.Delete(directory, false);
+                }
+                catch (IOException) { /* Another process may have opened the directory. */ }
+                catch (UnauthorizedAccessException) { /* Installed map files already passed validation. */ }
+            }
+        }
         string VariantBackup(string hash)
         {
             if (!HashText(hash)) throw new InvalidDataException("공용 모드의 검증값이 올바르지 않습니다.");
@@ -228,12 +316,14 @@ namespace CampaignHangar
         {
             var state = Current();
             var saved = state.installed.SingleOrDefault(c => c.id == item.id);
-            return saved != null && saved.release.files.Any(f => !File.Exists(Target(state.gameRoot, f.path)));
+            return saved != null && (HasLegacyOdysseyLayout(saved.release) ||
+                saved.release.files.Any(f => !File.Exists(Target(state.gameRoot, f.path))));
         }
         internal void RememberRelease(Campaign item, DedicatedRelease release)
         {
             ValidateRelease(release);
             if (release.id != item.id) throw new InvalidDataException("다른 캠페인의 설치 목록입니다.");
+            release = NormalizeOdysseyLayout(release);
             lock (checkedReleases) checkedReleases[item.dedicatedManifestSha256] =
                 Data.Json.Deserialize<DedicatedRelease>(Data.Json.Serialize(release));
         }
@@ -277,6 +367,7 @@ namespace CampaignHangar
             }
             if (release.files.Sum(f => f.bytes) > 32L * 1024 * 1024 * 1024) throw new InvalidDataException("전용 캠페인 설치 용량 한도를 초과했습니다.");
             var mapped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool allExplicit = release.packages.All(bundle => bundle != null && bundle.entries != null);
             foreach (var bundle in release.packages)
             {
                 if (bundle == null || !BundleUrl(bundle.url) || !bundle.url.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
@@ -291,6 +382,8 @@ namespace CampaignHangar
                         throw new InvalidDataException("ZIP 설치 대상이 누락되거나 중복됐습니다.");
                 }
             }
+            if (allExplicit && mapped.Count != paths.Count)
+                throw new InvalidDataException("ZIP 설치 경로 대응표에 빠진 게임 파일이 있습니다.");
             foreach (var launch in release.launches)
                 if (launch == null || String.IsNullOrWhiteSpace(launch.label) || launch.label.Length > 80 ||
                     !paths.Contains(launch.path) || !launch.path.StartsWith("Maps/", StringComparison.Ordinal) ||
@@ -371,6 +464,7 @@ namespace CampaignHangar
             if (Data.Hash(file, cancellation) != item.dedicatedManifestSha256) throw new InvalidDataException("설치 목록의 SHA256이 사이트 등록값과 다릅니다.");
             var release = Data.Read<DedicatedRelease>(file); ValidateRelease(release);
             if (release.id != item.id) throw new InvalidDataException("다른 캠페인의 설치 목록입니다.");
+            release = NormalizeOdysseyLayout(release);
             RememberRelease(item, release);
             return release;
         }
@@ -398,7 +492,7 @@ namespace CampaignHangar
             Func<DedicatedConflict, bool> confirmConflict = null, Dictionary<string, string> restoredFiles = null,
             Func<IReadOnlyList<DedicatedConflict>, bool> confirmRemoval = null)
         {
-            RequireGame(gameRoot); ValidateRelease(release);
+            RequireGame(gameRoot); release = NormalizeOdysseyLayout(release); ValidateRelease(release);
             var initialState = Current();
             var conflicts = InstallConflicts(release, initialState);
             string approvedState = null;
@@ -493,7 +587,7 @@ namespace CampaignHangar
             Dictionary<string, string> reusable, Func<IReadOnlyList<DedicatedConflict>, bool> confirmRemoval,
             string approvedState)
         {
-            RequireGame(game); ValidateRelease(release);
+            RequireGame(game); release = NormalizeOdysseyLayout(release); ValidateRelease(release);
             if (!HashText(manifestHash) || archives.Count != release.packages.Count) throw new InvalidDataException("설치 자료가 누락됐습니다.");
             string work = Path.Combine(root, "stage-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(work);
             var declared = release.files.ToDictionary(f => f.path, StringComparer.OrdinalIgnoreCase);
@@ -610,6 +704,8 @@ namespace CampaignHangar
             var affected = release.files.Select(f => f.path).Concat(old.installed.Where(c => c.id == release.id)
                 .SelectMany(c => c.release.files).Select(f => f.path));
             Change(old, next, game, work, cancellation, fault, affected, confirmConflict, progress, restoredFiles, reusable);
+            if (old.installed.Any(c => c.id == release.id && HasLegacyOdysseyLayout(c.release)))
+                CleanupLegacyOdysseyEmptyFolders(game);
         }
         internal static List<DedicatedConflict> InstallConflicts(DedicatedRelease release, DedicatedState state)
         {
